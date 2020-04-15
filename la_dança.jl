@@ -9,9 +9,10 @@ struct SEIR_Parameters
     e0::Float64
     i0::Float64
     r0::Float64
+    natural_r::Float64
     tinc::Float64
     tinf::Float64
-    SEIR_Parameters(ndays, s0, e0, i0, r0) = new(ndays, s0, e0, i0, r0, 5.2, 2.9)
+    SEIR_Parameters(ndays, s0, e0, i0, r0) = new(ndays, s0, e0, i0, r0, 2.5, 5.2, 2.9)
 end
 
 function seir_grad(m, s, e, i, r, rt, tinf, tinc)
@@ -23,7 +24,7 @@ function seir_grad(m, s, e, i, r, rt, tinf, tinc)
 end
 
 
-function seir_model_with_free_initial_values(iparam, natural_rt)
+function seir_model_with_free_initial_values(iparam)
     m = Model(Ipopt.Optimizer)
     # For simplicity I am assuming that one step per day is OK.
     dt = 1.0
@@ -34,7 +35,7 @@ function seir_model_with_free_initial_values(iparam, natural_rt)
     @variable(m, 0.0 <= e[0:lastday] <= 1.0)
     @variable(m, 0.0 <= i[0:lastday] <= 1.0)
     @variable(m, 0.0 <= r[0:lastday] <= 1.0)
-    @variable(m, 0.0 <= rt[0:lastday] <= natural_rt)
+    @variable(m, 0.0 <= rt[0:lastday] <= iparam.natural_r)
 
     # Note that I do not fix the initial state. It should be defined elsewhere.
 
@@ -57,8 +58,8 @@ function seir_model_with_free_initial_values(iparam, natural_rt)
     return m
 end
 
-function seir_model(iparam, natural_rt)
-    m = seir_model_with_free_initial_values(iparam, natural_rt)
+function seir_model(iparam)
+    m = seir_model_with_free_initial_values(iparam)
 
     # Initial state
     s0, e0, i0, r0 = m[:s][0], m[:e][0], m[:i][0], m[:r][0]
@@ -71,9 +72,9 @@ function seir_model(iparam, natural_rt)
 end
 
 
-function control_rt_model(iparam, max_i, natural_rt)
+function control_rt_model(iparam, max_i)
     lastday = iparam.ndays - 1
-    m = seir_model(iparam, natural_rt)
+    m = seir_model(iparam)
     rt, i = m[:rt], m[:i]
 
     # Rts can not change too fast.
@@ -94,21 +95,21 @@ function control_rt_model(iparam, max_i, natural_rt)
 end
 
 
-function fixed_rt_model(iparam, natural_rt)
+function fixed_rt_model(iparam)
     lastday = iparam.ndays - 1
-    m = seir_model(iparam, natural_rt)
+    m = seir_model(iparam)
     rt = m[:rt]
 
     # Fix all rts
     for t = 1:lastday
-        fix(rt[t], natural_rt; force=true)
+        fix(rt[t], iparam.natural_r; force=true)
     end
     return m
 end
 
 
-function fit_initcond_model(iparam, natural_rt, initial_data)
-    m = seir_model_with_free_initial_values(iparam, natural_rt)
+function fit_initcond_model(iparam, initial_data)
+    m = seir_model_with_free_initial_values(iparam)
     lastday = iparam.ndays - 1
 
     # Initial state
@@ -118,7 +119,7 @@ function fit_initcond_model(iparam, natural_rt, initial_data)
     set_start_value(e0, iparam.e0)
     set_start_value(i[0], iparam.i0)
     for t = 0:lastday
-        fix(rt[t], natural_rt; force=true)
+        fix(rt[t], iparam.natural_r; force=true)
     end
 
     @constraint(m, s0 + e0 + i[0] + r0 == 1.0)
@@ -132,7 +133,7 @@ function test_control_rt(iparam)
     #iparam = SEIR_Parameters(365, 0.9999999183808258, 1.632383484751865e-06, 8.161917423759325e-07, 0.0)
 
     # First the uncontroled infection
-    m = fixed_rt_model(iparam, 2.25);
+    m = fixed_rt_model(iparam)
     optimize!(m)
     iv = value.(m[:i]).data
     plot(iv, label="Uncontroled", lw=2)
@@ -141,15 +142,15 @@ function test_control_rt(iparam)
      # Now controled infections
      targets = [0.01, 0.03, 0.05]
      for max_infection in targets
-         m = control_rt_model(iparam, max_infection,  2.25);
+         m = control_rt_model(iparam, max_infection)
          optimize!(m)
          plot!(value.(m[:i]).data, label="$max_infection", lw=2)
     end
 
-    title!("Controlled rt")
+    title!("Controlled Rt")
     xlabel!("days")
     ylabel!("rt")
-    #ylims!(0.0, 0.08)
-    #yticks!(vcat([0.0], targets, [max_inf]), yformatter = yi -> @sprintf("%.2f", yi))
+    ylims!(0.0, max_inf + 0.005)
+    yticks!(vcat([0.0], targets, [max_inf]), yformatter = yi -> @sprintf("%.2f", yi))
     xticks!([0, 100, 200, 300, 365])
 end
