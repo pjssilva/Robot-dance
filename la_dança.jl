@@ -2,6 +2,7 @@ using JuMP
 using Ipopt
 using Printf
 using Plots
+import Statistics.mean
 
 struct SEIR_Parameters
     ndays::Int64
@@ -9,11 +10,12 @@ struct SEIR_Parameters
     e0::Float64
     i0::Float64
     r0::Float64
-    natural_r::Float64
+    natural_rt::Float64
     tinc::Float64
     tinf::Float64
     SEIR_Parameters(ndays, s0, e0, i0, r0) = new(ndays, s0, e0, i0, r0, 2.5, 5.2, 2.9)
 end
+
 
 function seir_grad(m, s, e, i, r, rt, tinf, tinc)
     ds = @NLexpression(m, -(rt/tinf)*s*i)
@@ -25,7 +27,7 @@ end
 
 
 function seir_model_with_free_initial_values(iparam)
-    m = Model(Ipopt.Optimizer)
+    m = Model(optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 3))
     # For simplicity I am assuming that one step per day is OK.
     dt = 1.0
 
@@ -35,7 +37,7 @@ function seir_model_with_free_initial_values(iparam)
     @variable(m, 0.0 <= e[0:lastday] <= 1.0)
     @variable(m, 0.0 <= i[0:lastday] <= 1.0)
     @variable(m, 0.0 <= r[0:lastday] <= 1.0)
-    @variable(m, 0.0 <= rt[0:lastday] <= iparam.natural_r)
+    @variable(m, 0.0 <= rt[0:lastday] <= iparam.natural_rt)
 
     # Note that I do not fix the initial state. It should be defined elsewhere.
 
@@ -57,6 +59,7 @@ function seir_model_with_free_initial_values(iparam)
     end
     return m
 end
+
 
 function seir_model(iparam)
     m = seir_model_with_free_initial_values(iparam)
@@ -102,12 +105,17 @@ function fixed_rt_model(iparam)
 
     # Fix all rts
     for t = 1:lastday
-        fix(rt[t], iparam.natural_r; force=true)
+        fix(rt[t], iparam.natural_rt; force=true)
     end
     return m
 end
 
 
+"""
+    fit_initcond_model(iparam, initial_data)
+
+Fit the initial parameters
+"""
 function fit_initcond_model(iparam, initial_data)
     m = seir_model_with_free_initial_values(iparam)
     lastday = iparam.ndays - 1
@@ -119,11 +127,13 @@ function fit_initcond_model(iparam, initial_data)
     set_start_value(e0, iparam.e0)
     set_start_value(i[0], iparam.i0)
     for t = 0:lastday
-        fix(rt[t], iparam.natural_r; force=true)
+        fix(rt[t], iparam.natural_rt; force=true)
     end
 
     @constraint(m, s0 + e0 + i[0] + r0 == 1.0)
-    @objective(m, Min, sum((i[t] - initial_data[t + 1])^2 for t = 0:lastday))
+    # Compute a scaling factor so as a least square objetive makes more sense
+    factor = 1.0/mean(initial_data)
+    @objective(m, Min, sum((factor*(i[t] - initial_data[t + 1]))^2 for t = 0:lastday))
 
     return m
 end
@@ -153,4 +163,12 @@ function test_control_rt(iparam)
     ylims!(0.0, max_inf + 0.005)
     yticks!(vcat([0.0], targets, [max_inf]), yformatter = yi -> @sprintf("%.2f", yi))
     xticks!([0, 100, 200, 300, 365])
+end
+
+
+function fit_initial(data)
+    iparam = SEIR_Parameters(length(data), 0.0, 0.0, 0.0, 0.0)
+    m = fit_initcond_model(iparam, data)
+    optimize!(m)
+    return value(m[:s][0]), value(m[:e][0]), value(m[:i][0]), value(m[:r][0])
 end
