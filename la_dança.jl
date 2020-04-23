@@ -13,8 +13,9 @@ struct SEIR_Parameters
     e1::Vector{Float64}
     i1::Vector{Float64}
     r1::Vector{Float64}
-    V::SparseMatrixCSC{Float64,Int64}
-    sumV::Vector{Float64}
+    out::Vector{Float64}
+    M::SparseMatrixCSC{Float64,Int64}
+    Mt::SparseMatrixCSC{Float64,Int64}
     natural_rt::Float64
     tinc::Float64
     tinf::Float64
@@ -23,29 +24,41 @@ struct SEIR_Parameters
         @assert length(e1) == ls1
         @assert length(i1) == ls1
         @assert length(r1) == ls1
-        V = sparse(I, ls1, ls1)
-        sumV = ones(ls1)
-        new(ndays, ls1, s1, e1, i1, r1, V, sumV, 2.5, 5.2, 2.9)
+
+        out = ones(ls1)
+        M = spzeros(ls1, ls1)
+        Mt = spzeros(ls1, ls1)
+        new(ndays, ls1, s1, e1, i1, r1, out, M, Mt, 2.5, 5.2, 2.9)
     end
-    function SEIR_Parameters(ndays, s1, e1, i1, r1, V)
+    function SEIR_Parameters(ndays, s1, e1, i1, r1, out, M, Mt)
         ls1 = length(s1)
         @assert length(e1) == ls1
         @assert length(i1) == ls1
         @assert length(r1) == ls1
-        @assert size(V) == (ls1, ls1)
-        @assert all(V .>= 0.0)
-        sumV = vec(sum(V, dims=1))
-        new(ndays, ls1, s1, e1, i1, r1, V, sumV, 2.5, 5.2, 2.9)
+        @assert size(M) == (ls1, ls1)
+        @assert all(M .>= 0.0)
+        @assert size(Mt) == (ls1, ls1)
+        @assert all(Mt .>= 0.0)
+        @assert size(out) == (ls1,)
+        @assert all(out .>= 0.0)
+
+        new(ndays, ls1, s1, e1, i1, r1, out, M, Mt, 2.5, 5.2, 2.9)
     end
 end
 
 
-function seir_grad(m, s, e, i, r, effect_rt, prm)
-    ds = @NLexpression(m, [c=1:prm.ncities], -(effect_rt[c]/prm.tinf)*s[c]*i[c])
-    de = @NLexpression(m, [c=1:prm.ncities], (effect_rt[c]/prm.tinf)*s[c]*i[c] - (1.0/prm.tinc)*e[c])
+function seir_grad(m, s, e, i, r, rt, p_day, prm)
+
+    # ds = @NLexpression(m, [c=1:prm.ncities],
+    #     -α*( (rt[c]/prm.tinf)*(1.0 - prm.out[c])*s[c]*i[c]/p_day[c] +
+    #          sum((rt[k]/prm.tinf)*prm.M[c, k]*s[c]*i[k]/p_day[k] for k = findnz(prm.M[c, :])[1])
+    #        )
+    #     -(1 - α)*(rt[c]/prm.tinf)*s[c]*i[c]
+    # )
+    # de = @NLexpression(m, [c=1:prm.ncities], -ds[c] - (1.0/prm.tinc)*e[c])
     di = @NLexpression(m, [c=1:prm.ncities], (1.0/prm.tinc)*e[c] - (1.0/prm.tinf)*i[c])
     dr = @NLexpression(m, [c=1:prm.ncities], (1.0/prm.tinf)*i[c])
-    return ds, de, di, dr
+    return di, dr
 end
 
 
@@ -64,26 +77,76 @@ function seir_model_with_free_initial_values(prm)
     # Control variable
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.ndays] <= prm.natural_rt)
 
-    effect_rt = @NLexpression(m, [c=1:prm.ncities, t=1:prm.ndays],
-        1.0/prm.sumV[c] * sum(prm.V[i, c]*rt[i, t] for i = findnz(prm.V[:, c])[1])
+    # Expressions that define "sub-states"
+    # ?_enter denotes the proportion of the population that enter city c during
+    # the day.
+    @NLexpression(m, s_enter[c=1:prm.ncities, t=1:prm.ndays],
+        sum(prm.M[i, c]*s[i, t] for i in findnz(prm.M[:, c])[1])
+    )
+    @NLexpression(m, e_enter[c=1:prm.ncities, t=1:prm.ndays],
+        sum(prm.M[i, c]*e[i, t] for i in findnz(prm.M[:, c])[1])
+    )
+    @NLexpression(m, r_enter[c=1:prm.ncities, t=1:prm.ndays],
+        sum(prm.M[i, c]*r[i, t] for i in findnz(prm.M[:, c])[1])
     )
 
+    # p_day is the ratio that the population of a city varies during the day
+    @NLexpression(m, p_day[c=1:prm.ncities, t=1:prm.ndays],
+        (1.0 - prm.out[c])*s[c, t] + s_enter[c, t] +
+        (1.0 - prm.out[c])*e[c, t] + e_enter[c, t] +
+        I[c, t] +
+        (1.0 - prm.out[c])*r[c, t] + r_enter[c, t]
+    )
+
+    # Parameter that measures how much important is the infection during the day
+    # when compared to the night.
+    α = 2/3
+
+    @NLexpression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
+        -α*( (rt[c, t]/prm.tinf)*(1.0 - prm.out[c])*s[c, t]*i[c, t]/p_day[c, t] +
+             sum((rt[k, t]/prm.tinf)*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = findnz(prm.Mt[:, c])[1])
+           )
+        -(1 - α)*(rt[c, t]/prm.tinf)*s[c, t]*i[c, t]
+    )
+    @NLexpression(m, de[c=1:prm.ncities, t=1:prm.ndays],
+        -ds[c, t] - (1.0/prm.tinc)*e[c,t]
+    )
+    @NLexpression(m, di[c=1:prm.ncities, t=1:prm.ndays],
+        (1.0/prm.tinc)*e[c, t] - (1.0/prm.tinf)*i[c, t]
+    )
+    @NLexpression(m, dr[c=1:prm.ncities, t=1:prm.ndays],
+        (1.0/prm.tinf)*i[c, t]
+    )
+
+    # Implement Heun's method
+
+    @NLexpression(m, sp[c=1:prm.ncities, t=2:prm.ndays], s[c, t - 1] + ds[c, t - 1]*dt)
+    @NLexpression(m, ep[c=1:prm.ncities, t=2:prm.ndays], e[c, t - 1] + de[c, t - 1]*dt)
+    @NLexpression(m, ip[c=1:prm.ncities, t=2:prm.ndays], i[c, t - 1] + di[c, t - 1]*dt)
+    @NLexpression(m, rp[c=1:prm.ncities, t=2:prm.ndays], r[c, t - 1] + dr[c, t - 1]*dt)
+
+    @NLexpression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
+        -α*( (rt[c, t]/prm.tinf)*(1.0 - prm.out[c])*sp[c, t]*ip[c, t]/p_day[c, t] +
+             sum((rt[k, t]/prm.tinf)*prm.Mt[k, c]*sp[c, t]*ip[k, t]/p_day[k, t] for k = findnz(prm.Mt[:, c])[1])
+           )
+        -(1 - α)*(rt[c, t]/prm.tinf)*sp[c, t]*ip[c, t]
+    )
+    @NLexpression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
+        -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
+    )
+    @NLexpression(m, dip[c=1:prm.ncities, t=2:prm.ndays],
+        (1.0/prm.tinc)*ep[c, t] - (1.0/prm.tinf)*ip[c, t]
+    )
+    @NLexpression(m, drp[c=1:prm.ncities, t=2:prm.ndays],
+        (1.0/prm.tinf)*ip[c, t]
+    )
+
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt)
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt)
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt)
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt)
+
     # Implement Haun's method
-    for t = 2:prm.ndays
-        ds, de, di, dr = seir_grad(m, s[:, t - 1], e[:, t - 1], i[:, t - 1], r[:, t - 1], effect_rt[:, t - 1], prm)
-
-        sp = @NLexpression(m, [c=1:prm.ncities], s[c, t - 1] + ds[c]*dt)
-        ep = @NLexpression(m, [c=1:prm.ncities], e[c, t - 1] + de[c]*dt)
-        ip = @NLexpression(m, [c=1:prm.ncities], i[c, t - 1] + di[c]*dt)
-        rp = @NLexpression(m, [c=1:prm.ncities], r[c, t - 1] + dr[c]*dt)
-
-        dsp, dep, dip, drp = seir_grad(m, sp, ep, ip, rp, effect_rt[:, t], prm)
-
-        @NLconstraint(m, [c=1:prm.ncities], s[c, t] == s[c, t - 1] + 0.5*(ds[c] + dsp[c])*dt)
-        @NLconstraint(m, [c=1:prm.ncities], e[c, t] == e[c, t - 1] + 0.5*(de[c] + dep[c])*dt)
-        @NLconstraint(m, [c=1:prm.ncities], i[c, t] == i[c, t - 1] + 0.5*(di[c] + dip[c])*dt)
-        @NLconstraint(m, [c=1:prm.ncities], r[c, t] == r[c, t - 1] + 0.5*(dr[c] + drp[c])*dt)
-    end
     return m
 end
 
@@ -228,7 +291,28 @@ function fit_initial(data)
     optimize!(m)
     return value(m[:s][0]), value(m[:e][0]), value(m[:i][0]), value(m[:r][0])
 end
-;
+
+
+function simple_mult_city(s1, e1, r1, i1, out, M, ndays)
+    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+
+    m = seir_model(prm)
+
+    # Allow to compute the total variation
+    rt = m[:rt]
+    @variable(m, tot_var[c=1:prm.ncities, t=2:prm.ndays])
+    @constraint(m, tot_var1[c=1:prm.ncities, t=2:prm.ndays], tot_var[c, t] >= rt[c, t - 1] - rt[c, t])
+    @constraint(m, tot_var2[c=1:prm.ncities, t=2:prm.ndays], tot_var[c, t] >= rt[c, t] - rt[c, t - 1])
+
+    # Constraint on maximum level of infection
+    i = m[:i]
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= 0.02)
+
+    # Maximize the rt (that is, minimize the demand required from society)
+    @objective(m, Max, sum(rt) - 0.1*sum(tot_var))
+
+    return m
+end
 
 function test_mult_city(n)
     s1 = 0.999999918380825*ones(n)
