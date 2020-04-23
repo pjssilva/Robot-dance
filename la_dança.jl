@@ -63,6 +63,19 @@ end
 
 
 function seir_model_with_free_initial_values(prm)
+    # Save work and get col indices of both M and Mt
+    # Ignore movemnts that almost do not change the population ot the destiny
+    # city.
+    # TODO: Discuss with Gustavo and Tiago
+    threshold = 0.001
+    coli_M = [[k for k in findnz(prm.M[:,c])[1] if prm.M[k, c] > threshold] for c in 1:prm.ncities]
+    threshold = 0.0001
+    coli_Mt = [[k for k in findnz(prm.Mt[:,c])[1] if prm.Mt[k, c] > threshold] for c in 1:prm.ncities]
+    println("Mean length for M = ", mean([length(i) for i in coli_M]))
+    println("Mean length for Mt = ", mean([length(i) for i in coli_Mt]))
+    println("Max length for M = ", maximum([length(i) for i in coli_M]))
+    println("Max length for Mt = ", maximum([length(i) for i in coli_Mt]))
+
     m = Model(optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 5))
     # For simplicity I am assuming that one step per day is OK.
     dt = 1.0
@@ -80,33 +93,30 @@ function seir_model_with_free_initial_values(prm)
     # Expressions that define "sub-states"
     # ?_enter denotes the proportion of the population that enter city c during
     # the day.
-    @NLexpression(m, s_enter[c=1:prm.ncities, t=1:prm.ndays],
-        sum(prm.M[i, c]*s[i, t] for i in findnz(prm.M[:, c])[1])
+    @NLexpression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
+        sum(prm.M[i, c]*(s[i, t] + e[i, t] + r[i, t]) for i in coli_M[c])
     )
-    @NLexpression(m, e_enter[c=1:prm.ncities, t=1:prm.ndays],
-        sum(prm.M[i, c]*e[i, t] for i in findnz(prm.M[:, c])[1])
-    )
-    @NLexpression(m, r_enter[c=1:prm.ncities, t=1:prm.ndays],
-        sum(prm.M[i, c]*r[i, t] for i in findnz(prm.M[:, c])[1])
-    )
-
     # p_day is the ratio that the population of a city varies during the day
     @NLexpression(m, p_day[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0 - prm.out[c])*s[c, t] + s_enter[c, t] +
-        (1.0 - prm.out[c])*e[c, t] + e_enter[c, t] +
-        I[c, t] +
-        (1.0 - prm.out[c])*r[c, t] + r_enter[c, t]
+        (1.0 - prm.out[c])*s[c, t] +
+        (1.0 - prm.out[c])*e[c, t] +
+        i[c, t] +
+        (1.0 - prm.out[c])*r[c, t] +
+        enter[c, t]
     )
 
     # Parameter that measures how much important is the infection during the day
     # when compared to the night.
     α = 2/3
 
+    @NLexpression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
+        sum(rt[k, t]*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = coli_Mt[c])
+    )
     @NLexpression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
-        -α*( (rt[c, t]/prm.tinf)*(1.0 - prm.out[c])*s[c, t]*i[c, t]/p_day[c, t] +
-             sum((rt[k, t]/prm.tinf)*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = findnz(prm.Mt[:, c])[1])
-           )
-        -(1 - α)*(rt[c, t]/prm.tinf)*s[c, t]*i[c, t]
+        -1.0/prm.tinf*(
+         α*( rt[c, t]*(1.0 - prm.out[c])*s[c, t]*i[c, t]/p_day[c, t] +
+             t1[c, t] ) +
+         (1 - α)*rt[c, t]*s[c, t]*i[c, t])
     )
     @NLexpression(m, de[c=1:prm.ncities, t=1:prm.ndays],
         -ds[c, t] - (1.0/prm.tinc)*e[c,t]
@@ -119,17 +129,19 @@ function seir_model_with_free_initial_values(prm)
     )
 
     # Implement Heun's method
-
     @NLexpression(m, sp[c=1:prm.ncities, t=2:prm.ndays], s[c, t - 1] + ds[c, t - 1]*dt)
     @NLexpression(m, ep[c=1:prm.ncities, t=2:prm.ndays], e[c, t - 1] + de[c, t - 1]*dt)
     @NLexpression(m, ip[c=1:prm.ncities, t=2:prm.ndays], i[c, t - 1] + di[c, t - 1]*dt)
     @NLexpression(m, rp[c=1:prm.ncities, t=2:prm.ndays], r[c, t - 1] + dr[c, t - 1]*dt)
 
+    @NLexpression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
+        sum(rt[k, t]*prm.Mt[k, c]*sp[c, t]*ip[k, t]/p_day[k, t] for k = coli_Mt[c])
+    )
     @NLexpression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
-        -α*( (rt[c, t]/prm.tinf)*(1.0 - prm.out[c])*sp[c, t]*ip[c, t]/p_day[c, t] +
-             sum((rt[k, t]/prm.tinf)*prm.Mt[k, c]*sp[c, t]*ip[k, t]/p_day[k, t] for k = findnz(prm.Mt[:, c])[1])
-           )
-        -(1 - α)*(rt[c, t]/prm.tinf)*sp[c, t]*ip[c, t]
+        -1.0/prm.tinf*(
+        α*( rt[c, t]*(1.0 - prm.out[c])*sp[c, t]*ip[c, t]/p_day[c, t] +
+            t2[c, t] ) +
+        (1 - α)*rt[c, t]*sp[c, t]*ip[c, t])
     )
     @NLexpression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
         -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
