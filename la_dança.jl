@@ -6,6 +6,25 @@ using LinearAlgebra
 using SparseArrays
 import Statistics.mean
 
+"""
+    struct SEIR_Parameters
+
+    Parameters to define a SEIR model:
+
+    ndays: for the simulation duration.
+    ncities: number of (interconnected) cities in the model.
+    s1, e1, i1, r1: start proportion of the population in each SEIR class.
+    out: vector that represents the proportion of the population that leaves
+        each city during the day.
+    M: Matrix that has at position (i, j) how much population goes from city
+        i to city j, the proportion with respect to the population of the
+        destiny (j).
+    Mt: traspose of M.
+    natural_rt: The natural reproduction rate of the disease, right now it
+        is assumed constant related to Covid19 (2.5).
+    tinc: incubation time related to Covid19 (5.2).
+    tinf: time of infection related to Covid19 (2.9).
+"""
 struct SEIR_Parameters
     ndays::Int64
     ncities::Int64
@@ -47,36 +66,32 @@ struct SEIR_Parameters
 end
 
 
-function seir_grad(m, s, e, i, r, rt, p_day, prm)
+"""
+    struct SEIR_Parameters
 
-    # ds = @NLexpression(m, [c=1:prm.ncities],
-    #     -α*( (rt[c]/prm.tinf)*(1.0 - prm.out[c])*s[c]*i[c]/p_day[c] +
-    #          sum((rt[k]/prm.tinf)*prm.M[c, k]*s[c]*i[k]/p_day[k] for k = findnz(prm.M[c, :])[1])
-    #        )
-    #     -(1 - α)*(rt[c]/prm.tinf)*s[c]*i[c]
-    # )
-    # de = @NLexpression(m, [c=1:prm.ncities], -ds[c] - (1.0/prm.tinc)*e[c])
-    di = @NLexpression(m, [c=1:prm.ncities], (1.0/prm.tinc)*e[c] - (1.0/prm.tinf)*i[c])
-    dr = @NLexpression(m, [c=1:prm.ncities], (1.0/prm.tinf)*i[c])
-    return di, dr
-end
+    Parameters to define a SEIR model:
 
-
+    ndays: for the simulation duration.
+    ncities: number of (interconnected) cities in the model.
+    s1, e1, i1, r1: start proportion of the population in each SEIR class.
+    out: vector that represents the proportion of the population that leaves
+        each city during the day.
+    M: Matrix that has at position (i, j) how much population goes from city
+        i to city j, the proportion with respect to the population of the
+        destiny (j).
+    Mt: traspose of M.
+    natural_rt: The natural reproduction rate of the disease, right now it
+        is assumed constant related to Covid19 (2.5).
+    tinc: incubation time related to Covid19 (5.2).
+    tinf: time of infection related to Covid19 (2.9).
+"""
 function seir_model_with_free_initial_values(prm)
     # Save work and get col indices of both M and Mt
-    # Ignore movemnts that almost do not change the population ot the destiny
-    # city.
-    # TODO: Discuss with Gustavo and Tiago
-    threshold = 0.001
-    coli_M = [[k for k in findnz(prm.M[:,c])[1] if prm.M[k, c] > threshold] for c in 1:prm.ncities]
-    threshold = 0.0001
-    coli_Mt = [[k for k in findnz(prm.Mt[:,c])[1] if prm.Mt[k, c] > threshold] for c in 1:prm.ncities]
-    println("Mean length for M = ", mean([length(i) for i in coli_M]))
-    println("Mean length for Mt = ", mean([length(i) for i in coli_Mt]))
-    println("Max length for M = ", maximum([length(i) for i in coli_M]))
-    println("Max length for Mt = ", maximum([length(i) for i in coli_Mt]))
+    coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
+    coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
 
-    m = Model(optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 5))
+    m = Model(optimizer_with_attributes(Ipopt.Optimizer,
+        "print_level" => 5, "linear_solver" => "ma97"))
     # For simplicity I am assuming that one step per day is OK.
     dt = 1.0
 
@@ -91,24 +106,23 @@ function seir_model_with_free_initial_values(prm)
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.ndays] <= prm.natural_rt)
 
     # Expressions that define "sub-states"
-    # ?_enter denotes the proportion of the population that enter city c during
+    # enter denotes the proportion of the population that enter city c during
     # the day.
     @NLexpression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
-        sum(prm.M[i, c]*(s[i, t] + e[i, t] + r[i, t]) for i in coli_M[c])
+        sum(prm.M[k, c]*(1.0 - i[k, t]) for k in coli_M[c])
     )
     # p_day is the ratio that the population of a city varies during the day
     @NLexpression(m, p_day[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0 - prm.out[c])*s[c, t] +
-        (1.0 - prm.out[c])*e[c, t] +
-        i[c, t] +
-        (1.0 - prm.out[c])*r[c, t] +
-        enter[c, t]
+        (1.0 - prm.out[c]) + prm.out[c]*i[c, t] + enter[c, t]
     )
 
     # Parameter that measures how much important is the infection during the day
     # when compared to the night.
     α = 2/3
 
+    # Implement a vectorized version of Heun's method.
+
+    # Compute the gradients at time t of the SEIR model.
     @NLexpression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
         sum(rt[k, t]*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = coli_Mt[c])
     )
@@ -128,12 +142,14 @@ function seir_model_with_free_initial_values(prm)
         (1.0/prm.tinf)*i[c, t]
     )
 
-    # Implement Heun's method
+    # Do the Euler step from the point in time t - 1 computing the intermediate
+    # point that we express as ?p (p is for plus).
     @NLexpression(m, sp[c=1:prm.ncities, t=2:prm.ndays], s[c, t - 1] + ds[c, t - 1]*dt)
     @NLexpression(m, ep[c=1:prm.ncities, t=2:prm.ndays], e[c, t - 1] + de[c, t - 1]*dt)
     @NLexpression(m, ip[c=1:prm.ncities, t=2:prm.ndays], i[c, t - 1] + di[c, t - 1]*dt)
     @NLexpression(m, rp[c=1:prm.ncities, t=2:prm.ndays], r[c, t - 1] + dr[c, t - 1]*dt)
 
+    # Compute the gradients in the intermediate point.
     @NLexpression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
         sum(rt[k, t]*prm.Mt[k, c]*sp[c, t]*ip[k, t]/p_day[k, t] for k = coli_Mt[c])
     )
@@ -153,16 +169,20 @@ function seir_model_with_free_initial_values(prm)
         (1.0/prm.tinf)*ip[c, t]
     )
 
+    # Perform a Heun's update
     @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt)
     @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt)
     @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt)
     @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt)
 
-    # Implement Haun's method
     return m
 end
 
+"""
+    seir_model(prm)
 
+    Creates a SEIR model setting the initial parameters for the SEIR variables.
+"""
 function seir_model(prm)
     m = seir_model_with_free_initial_values(prm)
 
@@ -178,30 +198,12 @@ function seir_model(prm)
 end
 
 
-# TODO: add cities
-function control_rt_model(prm, max_i)
-    prm.ndays = prm.ndays - 1
-    m = seir_model(prm)
-    rt, i = m[:rt], m[:i]
+"""
+    fixed_rt_model
 
-    # Rts can not change too fast.
-    for t = 2:prm.ndays
-        @constraint(m, 0.95*rt[t - 1] <= rt[t])
-        @constraint(m, rt[t] <= 1.05*rt[t - 1])
-    end
-
-    # Limit infection
-    for t = 1:prm.ndays
-        @constraint(m, i[t] <= max_i)
-    end
-
-    # Maximize rt
-    @objective(m, Max, sum(rt))
-
-    return m
-end
-
-
+    Creates a model fixing all initial parameters and defining the RT
+    as the natural R0 for Covid19.
+"""
 function fixed_rt_model(prm)
     m = seir_model(prm)
     rt = m[:rt]
@@ -215,97 +217,42 @@ function fixed_rt_model(prm)
     return m
 end
 
-function alternate_rt_model(prm)
-    m = seir_model(prm)
-    rt = m[:rt]
-    i = m[:i]
-
-    # Fix all rts of the first half cities in the firt half period
-    for c = 1:div(prm.ncities, 2)
-        for t = 1:div(prm.ndays, 2)
-            fix(rt[c, t], prm.natural_rt; force=true)
-        end
-    end
-
-    # Fix all rts of the second half cities in the second half period
-    for c = div(prm.ncities, 2) + 1:prm.ncities
-        for t = div(prm.ndays, 2) + 1:prm.ndays
-            fix(rt[c, t], prm.natural_rt; force=true)
-        end
-    end
-
-    # Calculate maximum i
-    @constraint(m, lim[t=50:100], i[25,t] <= 0.06)
-    @objective(m, Max, sum(i))
-    return m
-end
-
-# TODO: add cities
 """
     fit_initcond_model(prm, initial_data)
 
-Fit the initial parameters
+    Fit the initial parameters for a single city.
 """
-function fit_initcond_model(prm, initial_data)
+function fit_initial(data)
+
+    prm = SEIR_Parameters(length(data), [0.0], [0.0], [0.0], [0.0])
+
     m = seir_model_with_free_initial_values(prm)
-    prm.ndays = prm.ndays - 1
 
     # Initial state
-    s0, e0, i, r0, rt = m[:s][0], m[:e][0], m[:i], m[:r][0], m[:rt]
-    fix(r0, prm.r0; force=true)
-    set_start_value(s0, prm.s0)
-    set_start_value(e0, prm.e0)
-    set_start_value(i[0], prm.i0)
-    for t = 0:prm.ndays
+    s1, e1, i, r1, rt = m[:s][1], m[:e][1], m[:i], m[:r][1], m[:rt]
+    fix(r1, prm.r1; force=true)
+    set_start_value(s1, prm.s1)
+    set_start_value(e1, prm.e1)
+    set_start_value(i[1], prm.i1)
+    for t = 1:prm.ndays
         fix(rt[t], prm.natural_rt; force=true)
     end
 
-    @constraint(m, s0 + e0 + i[0] + r0 == 1.0)
-    # Compute a scaling factor so as a least square objetive makes more sense
+    @constraint(m, s1 + e1 + i[1] + r1 == 1.0)
+    # Compute a scaling factor so as a least square objective makes more sense
     factor = 1.0/mean(initial_data)
-    @objective(m, Min, sum((factor*(i[t] - initial_data[t + 1]))^2 for t = 0:prm.ndays))
+    @objective(m, Min, sum((factor*(i[t] - data[t]))^2 for t = 1:prm.ndays))
 
     return m
 end
 
-# TODO: add cities
-function test_control_rt(prm)
-    #prm = SEIR_Parameters(365, 0.9999999183808258, 1.632383484751865e-06, 8.161917423759325e-07, 0.0)
+"""
+    control_multcities
 
-    # First the uncontroled infection
-    m = fixed_rt_model(prm)
-    optimize!(m)
-    iv = value.(m[:i]).data
-    plot(iv, label="Uncontroled", lw=2)
-    max_inf = maximum(iv)
-
-     # Now controled infections
-     targets = [0.01, 0.03, 0.05]
-     for max_infection in targets
-         m = control_rt_model(prm, max_infection)
-         optimize!(m)
-         plot!(value.(m[:i]).data, label="$max_infection", lw=2)
-    end
-
-    title!("Controlled Rt")
-    xlabel!("days")
-    ylabel!("rt")
-    ylims!(0.0, max_inf + 0.005)
-    yticks!(vcat([0.0], targets, [max_inf]), yformatter = yi -> @sprintf("%.2f", yi))
-    xticks!([0, 100, 200, 300, 365])
-end
-
-
-# TODO: add cities
-function fit_initial(data)
-    prm = SEIR_Parameters(length(data), 0.0, 0.0, 0.0, 0.0)
-    m = fit_initcond_model(prm, data)
-    optimize!(m)
-    return value(m[:s][0]), value(m[:e][0]), value(m[:i][0]), value(m[:r][0])
-end
-
-
-function simple_mult_city(s1, e1, r1, i1, out, M, ndays)
+    Built a simple control problem that tries to force the proportion
+    of inffected to remain below target every day for every city.
+"""
+function control_multcities(s1, e1, r1, i1, out, M, ndays, target)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
 
     m = seir_model(prm)
@@ -318,7 +265,7 @@ function simple_mult_city(s1, e1, r1, i1, out, M, ndays)
 
     # Constraint on maximum level of infection
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= 0.02)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target)
 
     # Maximize the rt (that is, minimize the demand required from society)
     @objective(m, Max, sum(rt) - 0.1*sum(tot_var))
@@ -326,19 +273,42 @@ function simple_mult_city(s1, e1, r1, i1, out, M, ndays)
     return m
 end
 
-function test_mult_city(n)
-    s1 = 0.999999918380825*ones(n)
-    e1 = 1.632383484751865e-06*ones(n)
-    i1 = 8.161917423759325e-07*ones(n)
-    r1 = zeros(n)
-    V = Matrix{Float64}(I, n, n)
-    ind = x -> x <= n ? x : mod(x, n)
-    for i = 1:n
-        for j = div(n, 2):div(n, 2) + 5
-            V[ind(i + j), i] = 0.1
-        end
+"""
+    window_control_multcities
+
+    Try to attain a maximum number of infected in all cities below
+    target
+"""
+function window_control_multcities(s1, e1, r1, i1, out, M, ndays, target, window)
+    # Define how low we can control Rt
+    MINIMUM = 1.0
+
+    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+    m = seir_model(prm)
+
+    # Add constraints to make the dynamics interesting
+    rt = m[:rt]
+    i = m[:i]
+
+    # Allow piecewise constants controls
+    for c=1:prm.ncities, d=1:prm.ndays
+        set_lower_bound(rt[c, d], MINIMUM)
     end
-    iparam = SEIR_Parameters(180, s1, e1, i1, r1, sparse(V))
-    m = alternate_rt_model(iparam)
-    return m, iparam
+
+    for d = 1:window:prm.ndays
+        @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
+            rt[c, dl] == rt[c, d]
+        )
+    end
+
+    # Bound the maximal infection rate
+    @variable(m, maxi == target)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= maxi)
+
+    @objective(m, Max,
+        sum(i) +
+        0.01*sum(1/sqrt(t)*(rt[1, t] - rt[2, t])^2 for t = 1:window:prm.ndays)
+    );
+
+    return m
 end
