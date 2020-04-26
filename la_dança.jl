@@ -19,7 +19,7 @@ import Statistics.mean
     M: Matrix that has at position (i, j) how much population goes from city
         i to city j, the proportion with respect to the population of the
         destiny (j).
-    Mt: traspose of M.
+    Mt: transpose of M.
     natural_rt: The natural reproduction rate of the disease, right now it
         is assumed constant related to Covid19 (2.5).
     tinc: incubation time related to Covid19 (5.2).
@@ -79,7 +79,7 @@ end
     M: Matrix that has at position (i, j) how much population goes from city
         i to city j, the proportion with respect to the population of the
         destiny (j).
-    Mt: traspose of M.
+    Mt: transpose of M.
     natural_rt: The natural reproduction rate of the disease, right now it
         is assumed constant related to Covid19 (2.5).
     tinc: incubation time related to Covid19 (5.2).
@@ -250,12 +250,18 @@ end
     control_multcities
 
     Built a simple control problem that tries to force the proportion
-    of inffected to remain below target every day for every city.
+    of infected to remain below target every day for every city.
 """
-function control_multcities(s1, e1, r1, i1, out, M, ndays, target)
+function control_multcities(s1, e1, r1, i1, out, M, ndays, target, min_rt=1.0)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
 
     m = seir_model(prm)
+
+    rt = m[:rt]
+    for c=1:prm.ncities, d=1:prm.ndays
+        set_lower_bound(rt[c, d], min_rt)
+    end
+
 
     # Allow to compute the total variation
     rt = m[:rt]
@@ -277,12 +283,10 @@ end
     window_control_multcities
 
     Try to attain a maximum number of infected in all cities below
-    target
+    target but only allow changes of the control in the beggining of
+    a time window.
 """
-function window_control_multcities(s1, e1, r1, i1, out, M, ndays, target, window)
-    # Define how low we can control Rt
-    MINIMUM = 1.0
-
+function window_control_multcities(s1, e1, r1, i1, out, M, ndays, target, window, min_rt=1.0)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
     m = seir_model(prm)
 
@@ -290,9 +294,9 @@ function window_control_multcities(s1, e1, r1, i1, out, M, ndays, target, window
     rt = m[:rt]
     i = m[:i]
 
-    # Allow piecewise constants controls
+    # Allow piece wise constants controls
     for c=1:prm.ncities, d=1:prm.ndays
-        set_lower_bound(rt[c, d], MINIMUM)
+        set_lower_bound(rt[c, d], min_rt)
     end
 
     for d = 1:window:prm.ndays
@@ -307,7 +311,52 @@ function window_control_multcities(s1, e1, r1, i1, out, M, ndays, target, window
 
     @objective(m, Max,
         sum(i) +
-        0.01*sum(1/sqrt(t)*(rt[1, t] - rt[2, t])^2 for t = 1:window:prm.ndays)
+        0.01*sum(1/t*(rt[c, t] - rt[cl, t])^2
+            for t = 1:window:prm.ndays
+            for c = 1:prm.ncities for cl = c+1:prm.ncities)
+    );
+
+    return m
+end
+
+
+"""
+    playgorund
+
+    Placeholder for doing different tests.
+"""
+function playground(s1, e1, r1, i1, out, M, ndays, target, window, population, min_rt=1.0)
+
+    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+    m = seir_model(prm)
+
+    # Add constraints to make the dynamics interesting
+    rt = m[:rt]
+    i = m[:i]
+
+    # Allow piece wise constants controls
+    for c=1:prm.ncities, d=1:prm.ndays
+        set_lower_bound(rt[c, d], min_rt)
+    end
+
+    for d = 1:window:prm.ndays
+        @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
+            rt[c, dl] == rt[c, d]
+        )
+    end
+
+    # Bound the maximal infection rate
+    @variable(m, maxi == target)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= maxi)
+
+    # Total difference between decisions
+    @variable(m, dif_rt[c=1:prm.ncities, cl=c + 1:prm.ncities, d=1:window:prm.ndays])
+    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[c, d] - rt[cl, d] <= dif_rt[c, cl, d])
+    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[cl, d] - rt[c, d] <= dif_rt[c, cl, d])
+
+    @objective(m, Min,
+        sum(population[c]*(prm.natural_rt - rt[c, d]) for c = 1:prm.ncities for d = 1:window:prm.ndays) +
+        mean(population)/prm.ncities*sum(dif_rt)
     );
 
     return m
