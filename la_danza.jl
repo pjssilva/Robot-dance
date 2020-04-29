@@ -270,7 +270,7 @@ function control_multcities(s1, e1, r1, i1, out, M, population, ndays, target, m
 
     # Constraint on maximum level of infection
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target[c])
 
     mean_population = mean(sqrt.(population))
     @objective(m, Min,
@@ -313,8 +313,7 @@ function window_control_multcities(s1, e1, r1, i1, out, M, population, ndays, ta
     end
 
     # Bound the maximal infection rate
-    @variable(m, maxi == target)
-    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= maxi)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target[c])
 
     # Total difference between decisions
     @variable(m, dif_rt[c=1:prm.ncities, cl=c + 1:prm.ncities, d=1:window:prm.ndays])
@@ -340,90 +339,35 @@ end
 
     Placeholder for doing different tests.
 """
-function playground(s1, e1, r1, i1, out, M, ndays, target, window, population, min_rt=1.0)
-
+function playground(s1, e1, i1, r1, out, M, population, ndays, control, target)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
     m = seir_model(prm)
 
-    # Add constraints to make the dynamics interesting
     rt = m[:rt]
-    i = m[:i]
-
-    # Allow piece wise constants controls
     for c=1:prm.ncities, d=1:prm.ndays
-        set_lower_bound(rt[c, d], min_rt)
+        fix(rt[c, d], control[c, d]; force=true)
     end
 
-    for d = 1:window:prm.ndays
-        @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
-            rt[c, dl] == rt[c, d]
-        )
-    end
-
-    # Bound the maximal infection rate
-    @variable(m, maxi == target)
-    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= maxi)
-
-    # Total difference between decisions
-    @variable(m, dif_rt[c=1:prm.ncities, cl=c + 1:prm.ncities, d=1:window:prm.ndays])
-    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[c, d] - rt[cl, d] <= dif_rt[c, cl, d])
-    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[cl, d] - rt[c, d] <= dif_rt[c, cl, d])
-
-    @objective(m, Min,
-        sum(population[c]*(prm.natural_rt - rt[c, d]) for c = 1:prm.ncities for d = 1:window:prm.ndays) +
-        mean(population)/prm.ncities*sum(dif_rt)
-    );
-
-    return m
-end
-
-
-"""
-    playground2
-
-    Placeholder for doing different tests.
-"""
-function playground2(s1, e1, r1, i1, out, M, ndays, target, window, population, min_rt=1.0)
-
-    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
-    m = seir_model(prm)
-
-    # Add constraints to make the dynamics interesting
+    # Compute the total variation of RT
     rt = m[:rt]
+    @variable(m, tot_var[c=1:prm.ncities, t=2:prm.ndays])
+    @constraint(m, tot_var1[c=1:prm.ncities, t=2:prm.ndays], rt[c, t - 1] - rt[c, t] <= tot_var[c, t])
+    @constraint(m, tot_var2[c=1:prm.ncities, t=2:prm.ndays], rt[c, t] - rt[c, t - 1] <= tot_var[c, t])
+
+    # Constraint on maximum level of infection
     i = m[:i]
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target)
 
-    # Allow piece wise constants controls
-    for c=1:prm.ncities, d=1:prm.ndays
-        set_lower_bound(rt[c, d], min_rt)
-    end
-
-    parity = true
-    for d = 1:window:prm.ndays
-        if parity
-            @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
-                rt[c, dl] == rt[c, d]
-            )
-        else
-            for c=1:prm.ncities, dl = d:minimum([d + window - 1, prm.ndays])
-                fix(rt[c, dl],  prm.natural_rt - 0.5; force=true)
-            end
-        end
-        parity = !parity
-    end
-
-    # Bound the maximal infection rate
-    @variable(m, maxi == target)
-    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= maxi)
-
-    # Total difference between decisions
-    @variable(m, dif_rt[c=1:prm.ncities, cl=c + 1:prm.ncities, d=1:window:prm.ndays])
-    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[c, d] - rt[cl, d] <= dif_rt[c, cl, d])
-    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[cl, d] - rt[c, d] <= dif_rt[c, cl, d])
-
+    mean_population = mean(sqrt.(population))
     @objective(m, Min,
-        sum(population[c]*(prm.natural_rt - rt[c, d]) for c = 1:prm.ncities for d = 1:window:prm.ndays) +
-        mean(population)/prm.ncities*sum(dif_rt)
-    );
+        # Try to keep as many people working as possible
+        sum(sqrt(population[c])/mean_population*(prm.natural_rt - rt[c, d]) for c = 1:prm.ncities for d = 1:prm.ndays) +
+        # Avoid large variations
+        sum(tot_var) -
+        # Try to enforce different cities to alternate the controls
+        0.1/(prm.ncities)*sum((sqrt(population[c]) + sqrt(population[cl]))/(mean_population*d^0.25)*(rt[c, d] - rt[cl, d])^2 
+            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = 1:prm.ndays)
+    )
 
     return m
 end
