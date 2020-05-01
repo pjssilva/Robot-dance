@@ -252,35 +252,45 @@ end
     Built a simple control problem that tries to force the proportion
     of infected to remain below target every day for every city.
 """
-function control_multcities(s1, e1, r1, i1, out, M, population, ndays, target, min_rt=1.0)
+function control_multcities(s1, e1, r1, i1, out, M, population, ndays, target, force_difference,
+    hammer_duration=0, hammer=0.89, min_rt=1.0)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
 
     m = seir_model(prm)
 
     rt = m[:rt]
-    for c=1:prm.ncities, d=1:prm.ndays
+    for c = 1:prm.ncities, d = 1:hammer_duration
+        fix(rt[c,d], hammer; force=true)
+    end
+    for c = 1:prm.ncities, d = hammer_duration + 1:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
     # Compute the total variation of RT
     rt = m[:rt]
-    @variable(m, tot_var[c=1:prm.ncities, t=2:prm.ndays])
-    @constraint(m, tot_var1[c=1:prm.ncities, t=2:prm.ndays], rt[c, t - 1] - rt[c, t] <= tot_var[c, t])
-    @constraint(m, tot_var2[c=1:prm.ncities, t=2:prm.ndays], rt[c, t] - rt[c, t - 1] <= tot_var[c, t])
+    @variable(m, tot_var[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays])
+    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays], rt[c, t - 1] - rt[c, t] <= tot_var[c, t])
+    @constraint(m, tot_var2[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays], rt[c, t] - rt[c, t - 1] <= tot_var[c, t])
 
     # Constraint on maximum level of infection
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target[c])
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c])
 
-    mean_population = mean(sqrt.(population))
+    sq_pop = sqrt.(population)
+    mean_population = mean(sq_pop)
+    dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
+    for c = 1:prm.ncities, d = 1:prm.ndays
+        dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
+    end
     @objective(m, Min,
         # Try to keep as many people working as possible
-        sum(sqrt(population[c])/mean_population*(prm.natural_rt - rt[c, d]) for c = 1:prm.ncities for d = 1:prm.ndays) +
+        sum(sqrt(population[c])/mean_population*(prm.natural_rt - rt[c, d]) 
+            for c = 1:prm.ncities for d = hammer_duration + 1:prm.ndays) +
         # Avoid large variations
         sum(tot_var) -
         # Try to enforce different cities to alternate the controls
-        0.1/(prm.ncities)*sum((sqrt(population[c]) + sqrt(population[cl]))/(mean_population*d^0.25)*(rt[c, d] - rt[cl, d])^2 
-            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = 1:prm.ndays)
+        10.0/(prm.natural_rt^2)*sum(minimum((sq_pop[c], sq_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2 
+            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = hammer_duration + 1:prm.ndays)
     )
 
     return m
@@ -293,7 +303,8 @@ end
     target but only allow changes of the control in the beggining of
     a time window.
 """
-function window_control_multcities(s1, e1, r1, i1, out, M, population, ndays, target, window, min_rt=1.0)
+function window_control_multcities(s1, e1, r1, i1, out, M, population, ndays,
+    target, window, force_difference, hammer_duration=0, hammer=0.89, min_rt=1.0)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
     m = seir_model(prm)
 
@@ -302,32 +313,35 @@ function window_control_multcities(s1, e1, r1, i1, out, M, population, ndays, ta
     i = m[:i]
 
     # Allow piece wise constants controls
-    for c=1:prm.ncities, d=1:prm.ndays
+    for c = 1:prm.ncities, d = 1:hammer_duration
+        fix(rt[c,d], hammer; force=true)
+    end
+    for c = 1:prm.ncities, d = hammer_duration + 1:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
-    for d = 1:window:prm.ndays
+    for d = hammer_duration + 1:window:prm.ndays
         @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
             rt[c, dl] == rt[c, d]
         )
     end
 
     # Bound the maximal infection rate
-    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target[c])
-
-    # Total difference between decisions
-    @variable(m, dif_rt[c=1:prm.ncities, cl=c + 1:prm.ncities, d=1:window:prm.ndays])
-    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[c, d] - rt[cl, d] <= dif_rt[c, cl, d])
-    @constraint(m, [c=1:prm.ndays, cl=c+1:prm.ncities, d=1:window:prm.ndays], rt[cl, d] - rt[c, d] <= dif_rt[c, cl, d])
-
-    mean_population = mean(sqrt.(population))
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c])
+    
+    sq_pop = sqrt.(population)
+    mean_population = mean(sq_pop)
+    dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
+    for c = 1:prm.ncities, d = 1:prm.ndays
+        dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
+    end
     @objective(m, Min,
         # Try to keep as many people working as possible
         sum(sqrt(population[c])/mean_population*(prm.natural_rt - rt[c, d]) 
-            for c = 1:prm.ncities for d = 1:prm.ndays) -
+            for c = 1:prm.ncities for d = hammer_duration+1:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        window/(prm.ncities)*sum((sqrt(population[c]) + sqrt(population[cl]))/(mean_population*d^0.25)*(rt[c, d] - rt[cl, d])^2 
-            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = 1:window:prm.ndays)
+        10.0/(prm.natural_rt^2)*sum(minimum((sq_pop[c], sq_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2 
+            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = hammer_duration + 1:prm.ndays)
     )
 
     return m
@@ -339,7 +353,7 @@ end
 
     Placeholder for doing different tests.
 """
-function playground(s1, e1, i1, r1, out, M, population, ndays, control, target)
+function simulate_control(s1, e1, i1, r1, out, M, population, ndays, control, target)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
     m = seir_model(prm)
 
