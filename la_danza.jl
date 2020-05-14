@@ -274,22 +274,22 @@ function control_multcities(s1, e1, r1, i1, out, M, population, ndays, target, f
 
     # Constraint on maximum level of infection
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c])
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c, t])
 
-    sq_pop = sqrt.(population)
-    mean_population = mean(sq_pop)
+    effect_pop = sqrt.(population)
+    mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
     @objective(m, Min,
         # Try to keep as many people working as possible
-        sum(sqrt(population[c])/mean_population*(prm.natural_rt - rt[c, d]) 
+        sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration + 1:prm.ndays) +
         # Avoid large variations
         sum(tot_var) -
         # Try to enforce different cities to alternate the controls
-        10.0/(prm.natural_rt^2)*sum(minimum((sq_pop[c], sq_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2 
+        10.0/(prm.natural_rt^2)*sum(minimum((effect_pop[c], effect_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2
             for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = hammer_duration + 1:prm.ndays)
     )
 
@@ -327,20 +327,20 @@ function window_control_multcities(s1, e1, r1, i1, out, M, population, ndays,
     end
 
     # Bound the maximal infection rate
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c])
-    
-    sq_pop = sqrt.(population)
-    mean_population = mean(sq_pop)
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c, t])
+
+    effect_pop = sqrt.(population)
+    mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
     @objective(m, Min,
         # Try to keep as many people working as possible
-        sum(sqrt(population[c])/mean_population*(prm.natural_rt - rt[c, d]) 
+        sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration+1:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        10.0/(prm.natural_rt^2)*sum(minimum((sq_pop[c], sq_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2 
+        10.0/(prm.natural_rt^2)*sum(minimum((effect_pop[c], effect_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2
             for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = hammer_duration + 1:prm.ndays)
     )
 
@@ -349,9 +349,8 @@ end
 
 
 """
-    playground
+    simulate_control
 
-    Placeholder for doing different tests.
 """
 function simulate_control(s1, e1, i1, r1, out, M, population, ndays, control, target)
     prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
@@ -379,9 +378,31 @@ function simulate_control(s1, e1, i1, r1, out, M, population, ndays, control, ta
         # Avoid large variations
         sum(tot_var) -
         # Try to enforce different cities to alternate the controls
-        0.1/(prm.ncities)*sum((sqrt(population[c]) + sqrt(population[cl]))/(mean_population*d^0.25)*(rt[c, d] - rt[cl, d])^2 
+        0.1/(prm.ncities)*sum((sqrt(population[c]) + sqrt(population[cl]))/(mean_population*d^0.25)*(rt[c, d] - rt[cl, d])^2
             for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = 1:prm.ndays)
     )
+
+    return m
+end
+
+
+function playground(s1, e1, r1, i1, out, M, population, ndays, target, final_target, hammer_durarion)
+    
+    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+    m = seir_model(prm)
+
+    # Estimate number of infected.
+    i = m[:i]
+    @constraint(m, sum(population[c]*i[c,prm.ndays] for c = 1:prm.ncities) <= final_target)
+
+    # Bound the maximal infection rate
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c, t])
+
+    # Find the maximal acceptable Rt
+    @variable(m, min_rt)
+    rt = m[:rt]
+    @constraint(m, bound_rt[c = 1:prm.ncities, d = 1:prm.ndays], min_rt <= rt[c, d])
+    @objective(m, Max, min_rt)
 
     return m
 end
