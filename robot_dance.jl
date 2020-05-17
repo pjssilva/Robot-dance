@@ -1,3 +1,12 @@
+"""
+Robot dance
+
+Implements an automatic control framework to design efficient mitigation strategies
+for Covid-19 based on the control of a SEIR model.
+
+Copyright: Paulo J. S. Silva <pjssilva@unicamp.br>, 2020.
+"""
+
 using JuMP
 using Ipopt
 using Printf
@@ -9,21 +18,25 @@ import Statistics.mean
 """
     struct SEIR_Parameters
 
-    Parameters to define a SEIR model:
+Parameters to define a SEIR model:
 
-    ndays: for the simulation duration.
-    ncities: number of (interconnected) cities in the model.
-    s1, e1, i1, r1: start proportion of the population in each SEIR class.
-    out: vector that represents the proportion of the population that leaves
-        each city during the day.
-    M: Matrix that has at position (i, j) how much population goes from city
-        i to city j, the proportion with respect to the population of the
-        destiny (j).
-    Mt: transpose of M.
-    natural_rt: The natural reproduction rate of the disease, right now it
-        is assumed constant related to Covid19 (2.5).
-    tinc: incubation time related to Covid19 (5.2).
-    tinf: time of infection related to Covid19 (2.9).
+- ndays: simulation duration.
+- ncities: number of (interconnected) cities in the model.
+- s1, e1, i1, r1: start proportion of the population in each SEIR class.
+- out: vector that represents the proportion of the population that leave each city during
+    the day.
+- M: Matrix that has at position (i, j) how much population goes from city i to city j, the
+    proportion with respect to the population of the destiny (j). It should have 0 on the
+    diagonal.
+- Mt: transpose of M.
+- natural_rt: The natural reproduction rate of the disease, right now it is assumed constant
+    related to Covid19 (2.5).
+- tinc: incubation time related to Covid19 (5.2).
+- tinf: time of infection related to Covid19 (2.9).
+
+TODO: I believe it is better to have both out and M (and Mt) with the (absolute) number of
+people that should be normalized by the right population on the fly. It make a more readable
+code, I think. Try do adapt in the future and check. In this
 """
 struct SEIR_Parameters
     ndays::Int64
@@ -35,20 +48,16 @@ struct SEIR_Parameters
     out::Vector{Float64}
     M::SparseMatrixCSC{Float64,Int64}
     Mt::SparseMatrixCSC{Float64,Int64}
+    # Constant values that are defined in the inner constructs
     natural_rt::Float64
     tinc::Float64
     tinf::Float64
-    function SEIR_Parameters(ndays, s1, e1, i1, r1)
-        ls1 = length(s1)
-        @assert length(e1) == ls1
-        @assert length(i1) == ls1
-        @assert length(r1) == ls1
 
-        out = ones(ls1)
-        M = spzeros(ls1, ls1)
-        Mt = spzeros(ls1, ls1)
-        new(ndays, ls1, s1, e1, i1, r1, out, M, Mt, 2.5, 5.2, 2.9)
-    end
+    """
+        SEIR_Parameters(ndays, s1, e1, i1, r1, out., M, Mt)
+
+    SEIR parameters with mobility information (out, M, Mt).
+    """
     function SEIR_Parameters(ndays, s1, e1, i1, r1, out, M, Mt)
         ls1 = length(s1)
         @assert length(e1) == ls1
@@ -63,33 +72,35 @@ struct SEIR_Parameters
 
         new(ndays, ls1, s1, e1, i1, r1, out, M, Mt, 2.5, 5.2, 2.9)
     end
+
+    """
+        SEIR_Parameters(ndays, s1, e1, i1, r1)
+
+    SEIR parameters without mobility information, which is assumed to be 0.
+    """
+    function SEIR_Parameters(ndays, s1, e1, i1, r1)
+        ls1 = length(s1)
+        out = ones(ls1)
+        M = spzeros(ls1, ls1)
+        Mt = spzeros(ls1, ls1)
+        SEIR_Parameters(ndays, ls1, s1, e1, i1, r1, out, M, Mt)
+    end
 end
 
 
 """
-    struct SEIR_Parameters
+    seir_model_with_free_initial_value(prm)
 
-    Parameters to define a SEIR model:
-
-    ndays: for the simulation duration.
-    ncities: number of (interconnected) cities in the model.
-    s1, e1, i1, r1: start proportion of the population in each SEIR class.
-    out: vector that represents the proportion of the population that leaves
-        each city during the day.
-    M: Matrix that has at position (i, j) how much population goes from city
-        i to city j, the proportion with respect to the population of the
-        destiny (j).
-    Mt: transpose of M.
-    natural_rt: The natural reproduction rate of the disease, right now it
-        is assumed constant related to Covid19 (2.5).
-    tinc: incubation time related to Covid19 (5.2).
-    tinf: time of infection related to Covid19 (2.9).
+Build an optimization model with the SEIR discretization as constraints. The inicial
+parameters are not initialized and remain free. This can be useful, for example, to fit the
+initial parameters to observed data.
 """
 function seir_model_with_free_initial_values(prm)
     # Save work and get col indices of both M and Mt
     coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
     coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
 
+    # Create the otimizatin model.
     m = Model(optimizer_with_attributes(Ipopt.Optimizer,
         "print_level" => 5, "linear_solver" => "ma97"))
     # For simplicity I am assuming that one step per day is OK.
@@ -106,6 +117,7 @@ function seir_model_with_free_initial_values(prm)
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.ndays] <= prm.natural_rt)
 
     # Expressions that define "sub-states"
+
     # enter denotes the proportion of the population that enter city c during
     # the day.
     @NLexpression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
@@ -123,6 +135,9 @@ function seir_model_with_free_initial_values(prm)
     # Implement a vectorized version of Heun's method.
 
     # Compute the gradients at time t of the SEIR model.
+
+    # Estimates the infection rate of the succetibles people from city c
+    # that went to the other cities k.
     @NLexpression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
         sum(rt[k, t]*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = coli_Mt[c])
     )
@@ -170,18 +185,27 @@ function seir_model_with_free_initial_values(prm)
     )
 
     # Perform a Heun's update
-    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt)
-    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt)
-    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt)
-    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays], r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt)
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt
+    )
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt
+    )
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt
+    )
+    @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt
+    )
 
     return m
 end
 
+
 """
     seir_model(prm)
 
-    Creates a SEIR model setting the initial parameters for the SEIR variables.
+Creates a SEIR model setting the initial parameters for the SEIR variables from prm.
 """
 function seir_model(prm)
     m = seir_model_with_free_initial_values(prm)
@@ -199,10 +223,10 @@ end
 
 
 """
-    fixed_rt_model
+    fixed_rt_model(prm)
 
-    Creates a model fixing all initial parameters and defining the RT
-    as the natural R0 for Covid19.
+Creates a model from prm setting all initial parameters and defining the RT as the natural
+R0 set in prm.
 """
 function fixed_rt_model(prm)
     m = seir_model(prm)
@@ -217,10 +241,11 @@ function fixed_rt_model(prm)
     return m
 end
 
+
 """
     fit_initcond_model(prm, initial_data)
 
-    Fit the initial parameters for a single city.
+Fit the initial parameters for a single city using squared absolute error from initial_data.
 """
 function fit_initial(data)
 
@@ -246,80 +271,120 @@ function fit_initial(data)
     return m
 end
 
+
 """
     control_multcities
 
-    Built a simple control problem that tries to force the proportion
-    of infected to remain below target every day for every city.
-"""
-function control_multcities(s1, e1, r1, i1, out, M, population, ndays, target, force_difference,
-    hammer_duration=0, hammer=0.89, min_rt=1.0)
-    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+Built a simple control problem that tries to force the infected to remain below target every
+day for every city using daily controls with small total variation.
 
+# Atributes
+
+- prm: SEIR parameters with initial state and other informations.
+- population: population of each city.
+- target: limit of infected to impose at each city for each day.
+- force_difference: allow to turn off the alternation for a city in certain days. Should be
+    used if alternation happens even after the eipdemy is dieing off.
+- hammer_durarion: Duration in days of a intial hammer phase.
+- hammer: Rt level that should be achieved during hammer phase.
+- min_rt: minimum rt achievable outside the hammer phases.
+"""
+function control_multcities(prm, population, target, force_difference, hammer_duration=0,
+    hammer=0.89, min_rt=1.0)
     m = seir_model(prm)
 
+    # Fix rt during hammer phase
     rt = m[:rt]
     for c = 1:prm.ncities, d = 1:hammer_duration
         fix(rt[c,d], hammer; force=true)
     end
+
+    # Set the minimum rt achievable after the hammer phase.
     for c = 1:prm.ncities, d = hammer_duration + 1:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
-    # Compute the total variation of RT
+    # Compute the total variation of the control rt
     rt = m[:rt]
     @variable(m, tot_var[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays])
-    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays], rt[c, t - 1] - rt[c, t] <= tot_var[c, t])
-    @constraint(m, tot_var2[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays], rt[c, t] - rt[c, t - 1] <= tot_var[c, t])
+    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays],
+        rt[c, t - 1] - rt[c, t] <= tot_var[c, t]
+    )
+    @constraint(m, tot_var2[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays],
+        rt[c, t] - rt[c, t - 1] <= tot_var[c, t]
+    )
 
     # Constraint on maximum level of infection
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c, t])
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], 
+        i[c, t] <= target[c, t]
+    )
 
+    # Compute the weigths for the objectives terms
     effect_pop = sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
+    # Define objetive
     @objective(m, Min,
-        # Try to keep as many people working as possible
+        # Try to keep life as normal as possible
         sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration + 1:prm.ndays) +
         # Avoid large variations
         sum(tot_var) -
         # Try to enforce different cities to alternate the controls
-        10.0/(prm.natural_rt^2)*sum(minimum((effect_pop[c], effect_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2
-            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = hammer_duration + 1:prm.ndays)
+        10.0/(prm.natural_rt^2)*sum(
+            minimum((effect_pop[c], effect_pop[cl]))*
+            minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
+            (rt[c, d] - rt[cl, d])^2
+            for c = 1:prm.ncities 
+            for cl = c + 1:prm.ncities 
+            for d = hammer_duration + 1:prm.ndays
+        )
     )
 
     return m
 end
 
+
 """
     window_control_multcities
 
-    Try to attain a maximum number of infected in all cities below
-    target but only allow changes of the control in the beggining of
-    a time window.
+Built a simple control problem that tries to force the infected to remain below target every
+day for every city using daily controls but only allow them to change in the start of the
+time windows.
+
+# Atributes
+
+- prm: SEIR parameters with initial state and other informations.
+- population: population of each city.
+- target: limit of infected to impose at each city for each day.
+- window: number of days for the time window.
+- force_difference: allow to turn off the alternation for a city in certain days. Should be
+    used if alternation happens even after the eipdemy is dieing off.
+- hammer_durarion: Duration in days of a intial hammer phase.
+- hammer: Rt level that should be achieved during hammer phase.
+- min_rt: minimum rt achievable outside the hammer phases.
 """
-function window_control_multcities(s1, e1, r1, i1, out, M, population, ndays,
-    target, window, force_difference, hammer_duration=0, hammer=0.89, min_rt=1.0)
-    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+function window_control_multcities(prm, population, target, window, force_difference, 
+    hammer_duration=0, hammer=0.89, min_rt=1.0)
     m = seir_model(prm)
 
-    # Add constraints to make the dynamics interesting
+    # Fix rt during hammer phase
     rt = m[:rt]
-    i = m[:i]
-
-    # Allow piece wise constants controls
     for c = 1:prm.ncities, d = 1:hammer_duration
         fix(rt[c,d], hammer; force=true)
     end
+
+    # Set the minimum rt achievable after the hammer phase.
     for c = 1:prm.ncities, d = hammer_duration + 1:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
+
+    # Allow only piecewise constants controls
     for d = hammer_duration + 1:window:prm.ndays
         @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
             rt[c, dl] == rt[c, d]
@@ -327,21 +392,32 @@ function window_control_multcities(s1, e1, r1, i1, out, M, population, ndays,
     end
 
     # Bound the maximal infection rate
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c, t])
+    i = m[:i]
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], 
+        i[c, t] <= target[c, t]
+    )
 
+    # Compute the weigths for the objectives terms
     effect_pop = sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
+    # Define objetive
     @objective(m, Min,
         # Try to keep as many people working as possible
         sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration+1:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        10.0/(prm.natural_rt^2)*sum(minimum((effect_pop[c], effect_pop[cl]))*minimum((dif_matrix[c, d], dif_matrix[cl, d]))*(rt[c, d] - rt[cl, d])^2
-            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = hammer_duration + 1:prm.ndays)
+        100.0/(prm.natural_rt^2)*sum(
+            minimum((effect_pop[c], effect_pop[cl]))*
+            minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
+            (rt[c, d] - rt[cl, d])^2
+            for c = 1:prm.ncities 
+            for cl = c + 1:prm.ncities 
+            for d = hammer_duration + 1:prm.ndays
+        )
     )
 
     return m
@@ -351,9 +427,10 @@ end
 """
     simulate_control
 
+Simulate the SEIR mdel with a given control checking whether the target is achieved.
+
 """
-function simulate_control(s1, e1, i1, r1, out, M, population, ndays, control, target)
-    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+function simulate_control(prm, population, control, target)
     m = seir_model(prm)
 
     rt = m[:rt]
@@ -361,42 +438,54 @@ function simulate_control(s1, e1, i1, r1, out, M, population, ndays, control, ta
         fix(rt[c, d], control[c, d]; force=true)
     end
 
-    # Compute the total variation of RT
-    rt = m[:rt]
-    @variable(m, tot_var[c=1:prm.ncities, t=2:prm.ndays])
-    @constraint(m, tot_var1[c=1:prm.ncities, t=2:prm.ndays], rt[c, t - 1] - rt[c, t] <= tot_var[c, t])
-    @constraint(m, tot_var2[c=1:prm.ncities, t=2:prm.ndays], rt[c, t] - rt[c, t - 1] <= tot_var[c, t])
-
     # Constraint on maximum level of infection
     i = m[:i]
     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target)
 
-    mean_population = mean(sqrt.(population))
+    # Compute the weigths for the objectives terms
+    effect_pop = sqrt.(population)
+    mean_population = mean(effect_pop)
+    dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
+    for c = 1:prm.ncities, d = 1:prm.ndays
+        dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
+    end
+    # Define objetive
     @objective(m, Min,
         # Try to keep as many people working as possible
-        sum(sqrt(population[c])/mean_population*(prm.natural_rt - rt[c, d]) for c = 1:prm.ncities for d = 1:prm.ndays) +
-        # Avoid large variations
-        sum(tot_var) -
+        sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
+            for c = 1:prm.ncities for d = hammer_duration+1:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        0.1/(prm.ncities)*sum((sqrt(population[c]) + sqrt(population[cl]))/(mean_population*d^0.25)*(rt[c, d] - rt[cl, d])^2
-            for c = 1:prm.ncities for cl = c + 1:prm.ncities for d = 1:prm.ndays)
+        100.0/(prm.natural_rt^2)*sum(
+            minimum((effect_pop[c], effect_pop[cl]))*
+            minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
+            (rt[c, d] - rt[cl, d])^2
+            for c = 1:prm.ncities 
+            for cl = c + 1:prm.ncities 
+            for d = hammer_duration + 1:prm.ndays
+        )
     )
 
     return m
 end
 
 
-function playground(s1, e1, r1, i1, out, M, population, ndays, target, final_target, hammer_durarion)
-    
-    prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+"""
+    playground
+
+Funtion to test ideas.
+"""
+
+function playground(prm, population, target, final_target, hammer_durarion)
     m = seir_model(prm)
 
-    # Estimate number of infected.
+    # Constraint the overall number of infected to simulate a full health pool.
     i = m[:i]
     @constraint(m, sum(population[c]*i[c,prm.ndays] for c = 1:prm.ncities) <= final_target)
 
     # Bound the maximal infection rate
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], i[c, t] <= target[c, t])
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays],
+        i[c, t] <= target[c, t]
+    )
 
     # Find the maximal acceptable Rt
     @variable(m, min_rt)
