@@ -249,26 +249,29 @@ Fit the initial parameters for a single city using squared absolute error from i
 """
 function fit_initial(data)
 
-    prm = SEIR_Parameters(length(data), [0.0], [0.0], [0.0], [0.0])
+    prm = SEIR_Parameters(length(data), [0.0], [0.0], [0.0], [0.0], [0.0], zeros(1, 1), 
+        zeros(1, 1))
 
     m = seir_model_with_free_initial_values(prm)
 
     # Initial state
-    s1, e1, i, r1, rt = m[:s][1], m[:e][1], m[:i], m[:r][1], m[:rt]
-    fix(r1, prm.r1; force=true)
-    set_start_value(s1, prm.s1)
-    set_start_value(e1, prm.e1)
-    set_start_value(i[1], prm.i1)
+    s1, e1, i, r1, rt = m[:s][1, 1], m[:e][1, 1], m[:i], m[:r][1, 1], m[:rt]
+    fix(r1, prm.r1[1]; force=true)
+    set_start_value(s1, prm.s1[1])
+    set_start_value(e1, prm.e1[1])
+    set_start_value(i[1, 1], prm.i1[1])
     for t = 1:prm.ndays
-        fix(rt[t], prm.natural_rt; force=true)
+        fix(rt[1, t], prm.natural_rt; force=true)
     end
 
-    @constraint(m, s1 + e1 + i[1] + r1 == 1.0)
+    @constraint(m, s1 + e1 + i[1, 1] + r1 == 1.0)
     # Compute a scaling factor so as a least square objective makes more sense
-    factor = 1.0/mean(initial_data)
+    factor = 1.0/mean(data)
     @objective(m, Min, sum((factor*(i[t] - data[t]))^2 for t = 1:prm.ndays))
 
-    return m
+    optimize!(m)
+
+    return value(s1), value(e1), value(i[1, 1]), value(r1)
 end
 
 
@@ -410,7 +413,7 @@ function window_control_multcities(prm, population, target, window, force_differ
         sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration+1:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        100.0/(prm.natural_rt^2)*sum(
+        10.0/(prm.natural_rt^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
             (rt[c, d] - rt[cl, d])^2
