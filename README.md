@@ -15,7 +15,7 @@ some ideas to make it scale to the hundreds.
 
 ## Copyright 
 
-Copyright Paulo J. S. Silva e Luis Gustavo Nonato. See the [license file](LICENSE.MD).
+Copyright Paulo J. S. Silva e Luis Gustavo Nonato. See the [license file](LICENSE.md).
 
 ## Please Cite Us
 
