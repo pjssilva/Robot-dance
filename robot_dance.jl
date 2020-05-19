@@ -80,10 +80,10 @@ struct SEIR_Parameters
     """
     function SEIR_Parameters(ndays, s1, e1, i1, r1)
         ls1 = length(s1)
-        out = ones(ls1)
+        out = zeros(ls1)
         M = spzeros(ls1, ls1)
         Mt = spzeros(ls1, ls1)
-        SEIR_Parameters(ndays, ls1, s1, e1, i1, r1, out, M, Mt)
+        SEIR_Parameters(ndays, s1, e1, i1, r1, out, M, Mt)
     end
 end
 
@@ -100,7 +100,7 @@ function seir_model_with_free_initial_values(prm)
     coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
     coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
 
-    # Create the otimizatin model.
+    # Create the optimization model.
     m = Model(optimizer_with_attributes(Ipopt.Optimizer,
         "print_level" => 5, "linear_solver" => "ma97"))
     # For simplicity I am assuming that one step per day is OK.
