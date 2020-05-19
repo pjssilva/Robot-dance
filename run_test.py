@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import numpy.linalg as la
 import pylab as plt
+import os.path
 from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
 
@@ -130,18 +131,24 @@ def read_test_data(max_neighbors):
     large_cities.sort()
 
     # Read the mobility_matrix
-    mobility_matrix = pd.read_csv("data/move_mat_SÃO PAULO_SP-Municipios_norm.csv",
-        header=None, sep=" ")
-    city_names = pd.read_csv("data/move_mat_SÃO PAULO_SP-Municipios_reg_names.txt", 
-        header=None)
+    if os.path.exists("data/move_mat_SÃO PAULO_SP-Municipios_norm.csv"):
+        mobility_matrix = pd.read_csv("data/move_mat_SÃO PAULO_SP-Municipios_norm.csv",
+            header=None, sep=" ")
+        city_names = pd.read_csv("data/move_mat_SÃO PAULO_SP-Municipios_reg_names.txt", 
+            header=None)
 
-    # Cut the matrix to see only the desired cities
-    mobility_matrix.index = city_names[0]
-    mobility_matrix.columns = city_names[0]
-    mobility_matrix = mobility_matrix.loc[large_cities, large_cities].T
-    mobility_matrix = mobility_matrix.mask(
-        mobility_matrix.rank(axis=1, method='min', ascending=False) > max_neighbors + 1, 0
-    )
+        # Cut the matrix to see only the desired cities
+        mobility_matrix.index = city_names[0]
+        mobility_matrix.columns = city_names[0]
+        mobility_matrix = mobility_matrix.loc[large_cities, large_cities].T
+        mobility_matrix = mobility_matrix.mask(
+            mobility_matrix.rank(axis=1, method='min', ascending=False) > max_neighbors + 1, 0
+        )
+    else:
+        ncities = len(large_cities)
+        pre_M = np.zeros((ncities, ncities))
+        mobility_matrix = pd.DataFrame(data=pre_M, index=large_cities, columns=large_cities)
+
 
     # Read the initial values
     initial_values = pd.read_csv("data/initial_values.csv", header=1, index_col=0)
