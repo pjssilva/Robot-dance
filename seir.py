@@ -1,5 +1,5 @@
 # Author: Luis Gustavo Nonato  -- <gnonato@icmc.usp.br>
-# License: BSD 3 - Clause License 2018
+# License: See LICENSE.md file in the repository.
 # This is an implementation of a SEIR epidemic model
 
 import numpy as np
