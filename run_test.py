@@ -21,8 +21,8 @@ Julia.eval('include("robot_dance.jl")')
 # Configuration
 # Warning: the two constants below have to be the same used in the optimization code.
 # Configuration
-TINC = 2.9
-TINF = 5.2
+TINC = 5.2
+TINF = 2.9
 
 
 def initial_conditions(city, covid_data, covid_window, min_days, Julia, correction=1.0):
@@ -82,6 +82,7 @@ def compute_initial_condition_and_evolve(correction):
         covid_data[covid_data["estimated_population_2019"] > 100000]["city"].unique()
 
     # Compute initial parameters fitting the data
+    # TODO: Fix below it is only TINF
     covid_window = int(round(TINC*TINF))
     min_days = 5    
     parameters = {}
@@ -206,15 +207,21 @@ def prepare_optimization(large_cities, population, initial_values, M, out,
     Julia.force_dif = force_dif
     if window == 1:
         Julia.eval("""
-            prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
+            prm = SEIR_Parameters(ndays, s1, e1, i1, r1, 1, out, sparse(M), sparse(M'))
             m = control_multcities(prm, population, target, force_dif, hammer_duration, 
                                    hammer_level, min_level)
         """)
     else:
         Julia.window = window
         Julia.eval("""
-            prm = SEIR_Parameters(ndays, s1, e1, i1, r1, out, sparse(M), sparse(M'))
-            m = window_control_multcities(prm, population, target, window, force_dif, 
+            prm = SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, sparse(M), sparse(M'))
+        """)
+        Julia.eval("""
+            using JLD
+            save("dados.jld", "prm", prm, "pop", population, "target", target, 
+            "force_dif", force_dif, "hammer_duration", hammer_duration, 
+            "hammer_level", hammer_level, "min_level", min_level)
+            m = window_control_multcities(prm, population, target, force_dif, 
                                           hammer_duration, hammer_level, min_level);
         """);        
 
@@ -223,7 +230,7 @@ def save_result(cities_names, filename):
     """Save the result of a run for further processing.
     """
     Julia.eval("s = value.(m[:s]); e = value.(m[:e]); i = value.(m[:i]); r = value.(m[:r])")
-    Julia.eval("rt = value.(m[:rt])")
+    Julia.eval("rt = expand(value.(m[:rt]), prm)")
     df = []
     for i in range(len(cities_names)):
         c = cities_names[i]
@@ -243,13 +250,15 @@ def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities):
 
     Julia.eval("""
         optimize!(m)
-        rt = value.(m[:rt]); i = value.(m[:i])
+        pre_rt = value.(m[:rt]); i = value.(m[:i])
+        rt = expand(pre_rt, prm)
     """)
+
 
     for i in range(len(large_cities)):
         plt.plot(Julia.rt[i, :], label=large_cities[i], lw=5, alpha=0.5)
     plt.legend()
-    plt.title("Target reproduction rate")
+    plt.title("Target reproduction rate") 
     plt.savefig(rt_fig)
 
     plt.clf()

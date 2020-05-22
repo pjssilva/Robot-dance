@@ -23,6 +23,7 @@ Parameters to define a SEIR model:
 - ndays: simulation duration.
 - ncities: number of (interconnected) cities in the model.
 - s1, e1, i1, r1: start proportion of the population in each SEIR class.
+- window: time window to keep rt constant.
 - out: vector that represents the proportion of the population that leave each city during
     the day.
 - M: Matrix that has at position (i, j) how much population goes from city i to city j, the
@@ -45,6 +46,7 @@ struct SEIR_Parameters
     e1::Vector{Float64}
     i1::Vector{Float64}
     r1::Vector{Float64}
+    window::Int64
     out::Vector{Float64}
     M::SparseMatrixCSC{Float64,Int64}
     Mt::SparseMatrixCSC{Float64,Int64}
@@ -54,11 +56,11 @@ struct SEIR_Parameters
     tinf::Float64
 
     """
-        SEIR_Parameters(ndays, s1, e1, i1, r1, out., M, Mt)
+        SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, M, Mt)
 
     SEIR parameters with mobility information (out, M, Mt).
     """
-    function SEIR_Parameters(ndays, s1, e1, i1, r1, out, M, Mt)
+    function SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, M, Mt)
         ls1 = length(s1)
         @assert length(e1) == ls1
         @assert length(i1) == ls1
@@ -70,21 +72,55 @@ struct SEIR_Parameters
         @assert size(out) == (ls1,)
         @assert all(out .>= 0.0)
 
-        new(ndays, ls1, s1, e1, i1, r1, out, M, Mt, 2.5, 5.2, 2.9)
+        new(ndays, ls1, s1, e1, i1, r1, window, out, M, Mt, 2.5, 5.2, 2.9)
+    end
+
+    """
+        SEIR_Parameters(ndays, s1, e1, i1, r1, window)
+
+    SEIR parameters without mobility information, which is assumed to be 0.
+    """
+    function SEIR_Parameters(ndays, s1, e1, i1, r1, window)
+        ls1 = length(s1)
+        out = zeros(ls1)
+        M = spzeros(ls1, ls1)
+        Mt = spzeros(ls1, ls1)
+        SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, M, Mt)
     end
 
     """
         SEIR_Parameters(ndays, s1, e1, i1, r1)
 
-    SEIR parameters without mobility information, which is assumed to be 0.
+    SEIR parameters with unit time window and without mobility information, which is assumed 
+    to be 0.
     """
     function SEIR_Parameters(ndays, s1, e1, i1, r1)
-        ls1 = length(s1)
-        out = zeros(ls1)
-        M = spzeros(ls1, ls1)
-        Mt = spzeros(ls1, ls1)
-        SEIR_Parameters(ndays, s1, e1, i1, r1, out, M, Mt)
+        SEIR_Parameters(ndays, s1, e1, i1, r1, 1)
     end
+end
+
+
+"""
+    mapind(d, prm)
+
+    Allows for natural use of rt while computing the right index mapping in time d.
+"""
+function mapind(d, prm)
+    return prm.window*div(d - 1, prm.window) + 1
+end
+
+
+"""
+    expand(rt, prm)
+
+Expand rt to a full prm.ndays vector.
+"""
+function expand(rt, prm)
+    full_rt = zeros(prm.ncities, prm.ndays)
+    for c in 1:prm.ncities, d in 1:prm.ndays
+        full_rt[c, d] = rt[c, mapind(d, prm)]
+    end
+    return full_rt
 end
 
 
@@ -114,7 +150,7 @@ function seir_model_with_free_initial_values(prm)
     @variable(m, 0.0 <= r[1:prm.ncities, 1:prm.ndays] <= 1.0)
 
     # Control variable
-    @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.ndays] <= prm.natural_rt)
+    @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.natural_rt)
 
     # Expressions that define "sub-states"
 
@@ -139,13 +175,13 @@ function seir_model_with_free_initial_values(prm)
     # Estimates the infection rate of the succetibles people from city c
     # that went to the other cities k.
     @NLexpression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
-        sum(rt[k, t]*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = coli_Mt[c])
+        sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = coli_Mt[c])
     )
     @NLexpression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
         -1.0/prm.tinf*(
-         α*( rt[c, t]*(1.0 - prm.out[c])*s[c, t]*i[c, t]/p_day[c, t] +
+         α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*s[c, t]*i[c, t]/p_day[c, t] +
              t1[c, t] ) +
-         (1 - α)*rt[c, t]*s[c, t]*i[c, t])
+         (1 - α)*rt[c, mapind(t, prm)]*s[c, t]*i[c, mapind(t, prm)])
     )
     @NLexpression(m, de[c=1:prm.ncities, t=1:prm.ndays],
         -ds[c, t] - (1.0/prm.tinc)*e[c,t]
@@ -166,13 +202,13 @@ function seir_model_with_free_initial_values(prm)
 
     # Compute the gradients in the intermediate point.
     @NLexpression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
-        sum(rt[k, t]*prm.Mt[k, c]*sp[c, t]*ip[k, t]/p_day[k, t] for k = coli_Mt[c])
+        sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*sp[c, t]*ip[k, t]/p_day[k, t] for k = coli_Mt[c])
     )
     @NLexpression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
         -1.0/prm.tinf*(
-        α*( rt[c, t]*(1.0 - prm.out[c])*sp[c, t]*ip[c, t]/p_day[c, t] +
+        α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*sp[c, t]*ip[c, t]/p_day[c, t] +
             t2[c, t] ) +
-        (1 - α)*rt[c, t]*sp[c, t]*ip[c, t])
+        (1 - α)*rt[c, mapind(t, prm)]*sp[c, t]*ip[c, t])
     )
     @NLexpression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
         -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
@@ -234,7 +270,7 @@ function fixed_rt_model(prm)
 
     # Fix all rts
     for c = 1:prm.ncities
-        for t = 1:prm.ndays
+        for t = 1:prm.window:prm.ndays
             fix(rt[c, t], prm.natural_rt; force=true)
         end
     end
@@ -249,7 +285,7 @@ Fit the initial parameters for a single city using squared absolute error from i
 """
 function fit_initial(data)
 
-    prm = SEIR_Parameters(length(data), [0.0], [0.0], [0.0], [0.0], [0.0], zeros(1, 1), 
+    prm = SEIR_Parameters(length(data), [0.0], [0.0], [0.0], [0.0], 1, [0.0], zeros(1, 1), 
         zeros(1, 1))
 
     m = seir_model_with_free_initial_values(prm)
@@ -260,7 +296,7 @@ function fit_initial(data)
     set_start_value(s1, prm.s1[1])
     set_start_value(e1, prm.e1[1])
     set_start_value(i[1, 1], prm.i1[1])
-    for t = 1:prm.ndays
+    for t = 1:prm.window:prm.ndays
         fix(rt[1, t], prm.natural_rt; force=true)
     end
 
@@ -294,27 +330,29 @@ day for every city using daily controls with small total variation.
 """
 function control_multcities(prm, population, target, force_difference, hammer_duration=0,
     hammer=0.89, min_rt=1.0)
+    @assert mod(hammer_duration, prm.window) == 0
+
     m = seir_model(prm)
 
     # Fix rt during hammer phase
     rt = m[:rt]
-    for c = 1:prm.ncities, d = 1:hammer_duration
-        fix(rt[c,d], hammer; force=true)
+    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration
+        fix(rt[c, d], hammer; force=true)
     end
 
     # Set the minimum rt achievable after the hammer phase.
-    for c = 1:prm.ncities, d = hammer_duration + 1:prm.ndays
+    for c = 1:prm.ncities, d = hammer_duration + 1:prm.window:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
     # Compute the total variation of the control rt
     rt = m[:rt]
-    @variable(m, tot_var[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays])
-    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays],
-        rt[c, t - 1] - rt[c, t] <= tot_var[c, t]
+    @variable(m, tot_var[c=1:prm.ncities, t=hammer_duration + prm.window + 1:prm.window:prm.ndays])
+    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration + prm.window + 1:prm.window:prm.ndays],
+        rt[c, t - prm.window] - rt[c, t] <= tot_var[c, t]
     )
     @constraint(m, tot_var2[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays],
-        rt[c, t] - rt[c, t - 1] <= tot_var[c, t]
+        rt[c, t] - rt[c, t - prm.window] <= tot_var[c, t]
     )
 
     # Constraint on maximum level of infection
@@ -323,18 +361,18 @@ function control_multcities(prm, population, target, force_difference, hammer_du
         i[c, t] <= target[c, t]
     )
 
-    # Compute the weigths for the objectives terms
+    # Compute the weights for the objectives terms
     effect_pop = sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
-    # Define objetive
+    # Define objective
     @objective(m, Min,
         # Try to keep life as normal as possible
         sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration + 1:prm.ndays) +
+            for c = 1:prm.ncities for d = hammer_duration + 1:prm.window:prm.ndays) +
         # Avoid large variations
         sum(tot_var) -
         # Try to enforce different cities to alternate the controls
@@ -344,7 +382,7 @@ function control_multcities(prm, population, target, force_difference, hammer_du
             (rt[c, d] - rt[cl, d])^2
             for c = 1:prm.ncities 
             for cl = c + 1:prm.ncities 
-            for d = hammer_duration + 1:prm.ndays
+            for d = hammer_duration + 1:prm.window:prm.ndays
         )
     )
 
@@ -371,28 +409,30 @@ time windows.
 - hammer: Rt level that should be achieved during hammer phase.
 - min_rt: minimum rt achievable outside the hammer phases.
 """
-function window_control_multcities(prm, population, target, window, force_difference, 
+function window_control_multcities(prm, population, target, force_difference, 
     hammer_duration=0, hammer=0.89, min_rt=1.0)
+    @assert mod(hammer_duration, prm.window) == 0
+
     m = seir_model(prm)
 
     # Fix rt during hammer phase
     rt = m[:rt]
-    for c = 1:prm.ncities, d = 1:hammer_duration
-        fix(rt[c,d], hammer; force=true)
+    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration
+        fix(rt[c, d], hammer; force=true)
     end
 
     # Set the minimum rt achievable after the hammer phase.
-    for c = 1:prm.ncities, d = hammer_duration + 1:prm.ndays
+    for c = 1:prm.ncities, d = hammer_duration + 1:prm.window:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
 
-    # Allow only piecewise constants controls
-    for d = hammer_duration + 1:window:prm.ndays
-        @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
-            rt[c, dl] == rt[c, d]
-        )
-    end
+    # # Allow only piecewise constants controls
+    # for d = hammer_duration + 1:window:prm.ndays
+    #     @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
+    #         rt[c, mapind(dl, prm)] == rt[c, mapind(d, prm)]
+    #     )
+    # end
 
     # Bound the maximal infection rate
     i = m[:i]
@@ -400,26 +440,26 @@ function window_control_multcities(prm, population, target, window, force_differ
         i[c, t] <= target[c, t]
     )
 
-    # Compute the weigths for the objectives terms
+    # Compute the weights for the objectives terms
     effect_pop = sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
-    # Define objetive
+    # Define objective
     @objective(m, Min,
         # Try to keep as many people working as possible
-        sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration+1:prm.ndays) -
+        prm.window*sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
+            for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        10.0/(prm.natural_rt^2)*sum(
+        10.0*prm.window/(prm.natural_rt^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
             (rt[c, d] - rt[cl, d])^2
             for c = 1:prm.ncities 
             for cl = c + 1:prm.ncities 
-            for d = hammer_duration + 1:prm.ndays
+            for d = hammer_duration + 1:prm.window:prm.ndays
         )
     )
 
@@ -432,40 +472,44 @@ end
 
 Simulate the SEIR mdel with a given control checking whether the target is achieved.
 
+TODO: fix this, hammer_duration does not even exist.
+
 """
 function simulate_control(prm, population, control, target)
+    @assert mod(hammer_duration, prm.window) == 0
+
     m = seir_model(prm)
 
     rt = m[:rt]
     for c=1:prm.ncities, d=1:prm.ndays
-        fix(rt[c, d], control[c, d]; force=true)
+        fix(rt[c, mapind(d, prm)], control[c, d]; force=true)
     end
 
     # Constraint on maximum level of infection
     i = m[:i]
     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], i[c, t] <= target)
 
-    # Compute the weigths for the objectives terms
+    # Compute the weights for the objectives terms
     effect_pop = sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
-    # Define objetive
+    # Define objective
     @objective(m, Min,
         # Try to keep as many people working as possible
-        sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration+1:prm.ndays) -
+        sum(prm.window*effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
+            for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
         # Try to enforce different cities to alternate the controls
         100.0/(prm.natural_rt^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
-            (rt[c, d] - rt[cl, d])^2
+            (rt[c, d] - rt[cl, d]^2)
             for c = 1:prm.ncities 
             for cl = c + 1:prm.ncities 
-            for d = hammer_duration + 1:prm.ndays
-        )
+            for d = hammer_duration + 1:prm.window:prm.ndays
+            )
     )
 
     return m
@@ -479,6 +523,8 @@ Funtion to test ideas.
 """
 
 function playground(prm, population, target, final_target, hammer_durarion)
+    @assert mod(hammer_duration, prm.window) == 0
+
     m = seir_model(prm)
 
     # Constraint the overall number of infected to simulate a full health pool.
@@ -493,7 +539,7 @@ function playground(prm, population, target, final_target, hammer_durarion)
     # Find the maximal acceptable Rt
     @variable(m, min_rt)
     rt = m[:rt]
-    @constraint(m, bound_rt[c = 1:prm.ncities, d = 1:prm.ndays], min_rt <= rt[c, d])
+    @constraint(m, bound_rt[c = 1:prm.ncities, d = 1:prm.window:prm.ndays], min_rt <= rt[c, d])
     @objective(m, Max, min_rt)
 
     return m
