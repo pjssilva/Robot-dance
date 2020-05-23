@@ -172,7 +172,7 @@ function seir_model_with_free_initial_values(prm)
 
     # Compute the gradients at time t of the SEIR model.
 
-    # Estimates the infection rate of the succetibles people from city c
+    # Estimates the infection rate of the susceptible people from city c
     # that went to the other cities k.
     @NLexpression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
         sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = coli_Mt[c])
@@ -317,7 +317,7 @@ end
 Built a simple control problem that tries to force the infected to remain below target every
 day for every city using daily controls with small total variation.
 
-# Atributes
+# Attributes
 
 - prm: SEIR parameters with initial state and other informations.
 - population: population of each city.
@@ -397,7 +397,7 @@ Built a simple control problem that tries to force the infected to remain below 
 day for every city using daily controls but only allow them to change in the start of the
 time windows.
 
-# Atributes
+# Attributes
 
 - prm: SEIR parameters with initial state and other informations.
 - population: population of each city.
@@ -425,14 +425,6 @@ function window_control_multcities(prm, population, target, force_difference,
     for c = 1:prm.ncities, d = hammer_duration + 1:prm.window:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
-
-
-    # # Allow only piecewise constants controls
-    # for d = hammer_duration + 1:window:prm.ndays
-    #     @constraint(m, [c=1:prm.ncities, dl=d + 1:minimum([d + window - 1, prm.ndays])],
-    #         rt[c, mapind(dl, prm)] == rt[c, mapind(d, prm)]
-    #     )
-    # end
 
     # Bound the maximal infection rate
     i = m[:i]
