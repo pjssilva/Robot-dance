@@ -19,6 +19,10 @@ import Statistics.mean
 
 Parameters to define a SEIR model:
 
+- tinc: incubation time (5.2 for Covid-19).
+- tinf: time of infection (2.9 for Covid-19).
+- rep: The natural reproduction rate of the disease, for examploe for Covid-19
+  you might want to use 2.5 or a similar value.
 - ndays: simulation duration.
 - ncities: number of (interconnected) cities in the model.
 - s1, e1, i1, r1: start proportion of the population in each SEIR class.
@@ -29,16 +33,12 @@ Parameters to define a SEIR model:
     proportion with respect to the population of the destiny (j). It should have 0 on the
     diagonal.
 - Mt: transpose of M.
-- natural_rt: The natural reproduction rate of the disease, right now it is assumed constant
-    related to Covid19 (2.5).
-- tinc: incubation time related to Covid19 (5.2).
-- tinf: time of infection related to Covid19 (2.9).
-
-TODO: I believe it is better to have both out and M (and Mt) with the (absolute) number of
-people that should be normalized by the right population on the fly. It make a more readable
-code, I think. Try do adapt in the future and check. In this
 """
 struct SEIR_Parameters
+    # Basic epidemiological constants that define the SEIR model
+    tinc::Float64
+    tinf::Float64
+    rep::Float64
     ndays::Int64
     ncities::Int64
     s1::Vector{Float64}
@@ -49,17 +49,13 @@ struct SEIR_Parameters
     out::Vector{Float64}
     M::SparseMatrixCSC{Float64,Int64}
     Mt::SparseMatrixCSC{Float64,Int64}
-    # Constant values that are defined in the inner constructs
-    natural_rt::Float64
-    tinc::Float64
-    tinf::Float64
 
     """
-        SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, M, Mt)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window, out, M, Mt)
 
     SEIR parameters with mobility information (out, M, Mt).
     """
-    function SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, M, Mt)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window, out, M, Mt)
         ls1 = length(s1)
         @assert length(e1) == ls1
         @assert length(i1) == ls1
@@ -71,30 +67,30 @@ struct SEIR_Parameters
         @assert size(out) == (ls1,)
         @assert all(out .>= 0.0)
 
-        new(ndays, ls1, s1, e1, i1, r1, window, out, M, Mt, 2.5, 5.2, 2.9)
+        new(tinc, tinf, rep, ndays, ls1, s1, e1, i1, r1, window, out, M, Mt)
     end
 
     """
-        SEIR_Parameters(ndays, s1, e1, i1, r1, window)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window)
 
     SEIR parameters without mobility information, which is assumed to be 0.
     """
-    function SEIR_Parameters(ndays, s1, e1, i1, r1, window)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window)
         ls1 = length(s1)
         out = zeros(ls1)
         M = spzeros(ls1, ls1)
         Mt = spzeros(ls1, ls1)
-        SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, M, Mt)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window, out, M, Mt)
     end
 
     """
-        SEIR_Parameters(ndays, s1, e1, i1, r1)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1)
 
     SEIR parameters with unit time window and without mobility information, which is assumed 
     to be 0.
     """
-    function SEIR_Parameters(ndays, s1, e1, i1, r1)
-        SEIR_Parameters(ndays, s1, e1, i1, r1, 1)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, 1)
     end
 end
 
@@ -152,7 +148,7 @@ function seir_model_with_free_initial_values(prm)
     @variable(m, 0.0 <= r[1:prm.ncities, 1:prm.ndays] <= 1.0)
 
     # Control variable
-    @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.natural_rt)
+    @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
 
     # Expressions that define "sub-states"
 
@@ -273,7 +269,7 @@ function fixed_rt_model(prm)
     # Fix all rts
     for c = 1:prm.ncities
         for t = 1:prm.window:prm.ndays
-            fix(rt[c, t], prm.natural_rt; force=true)
+            fix(rt[c, t], prm.rep; force=true)
         end
     end
     return m
@@ -285,10 +281,10 @@ end
 
 Fit the initial parameters for a single city using squared absolute error from initial_data.
 """
-function fit_initial(data)
+function fit_initial(tinc, tinf, rep, data)
 
-    prm = SEIR_Parameters(length(data), [0.0], [0.0], [0.0], [0.0], 1, [0.0], zeros(1, 1), 
-        zeros(1, 1))
+    prm = SEIR_Parameters(tinc, tinf, rep, length(data), [0.0], [0.0], [0.0], [0.0], 
+        1, [0.0], zeros(1, 1), zeros(1, 1))
 
     m = seir_model_with_free_initial_values(prm)
 
@@ -299,7 +295,7 @@ function fit_initial(data)
     set_start_value(e1, prm.e1[1])
     set_start_value(i[1, 1], prm.i1[1])
     for t = 1:prm.window:prm.ndays
-        fix(rt[1, t], prm.natural_rt; force=true)
+        fix(rt[1, t], prm.rep; force=true)
     end
 
     @constraint(m, s1 + e1 + i[1, 1] + r1 == 1.0)
@@ -373,12 +369,12 @@ function control_multcities(prm, population, target, force_difference, hammer_du
     # Define objective
     @objective(m, Min,
         # Try to keep life as normal as possible
-        sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
+        sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration + 1:prm.window:prm.ndays) +
         # Avoid large variations
         sum(tot_var) -
         # Try to enforce different cities to alternate the controls
-        10.0/(prm.natural_rt^2)*sum(
+        10.0/(prm.rep^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
             (rt[c, d] - rt[cl, d])^2
@@ -444,10 +440,10 @@ function window_control_multcities(prm, population, target, force_difference,
     # Define objective
     @objective(m, Min,
         # Try to keep as many people working as possible
-        prm.window*sum(effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
+        prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        10.0*prm.window/(prm.natural_rt^2)*sum(
+        10.0*prm.window/(prm.rep^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
             (rt[c, d] - rt[cl, d])^2
@@ -493,10 +489,10 @@ function simulate_control(prm, population, control, target)
     # Define objective
     @objective(m, Min,
         # Try to keep as many people working as possible
-        sum(prm.window*effect_pop[c]/mean_population*(prm.natural_rt - rt[c, d])
+        sum(prm.window*effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
         # Try to enforce different cities to alternate the controls
-        100.0/(prm.natural_rt^2)*sum(
+        100.0/(prm.rep^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
             (rt[c, d] - rt[cl, d]^2)

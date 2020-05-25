@@ -17,7 +17,7 @@ Julia.eval('ENV["OMP_NUM_THREADS"] = 8')
 Julia.eval('include("robot_dance.jl")')
 
 
-def save_basic_parameters(tinc=5.2, tinf=2.9, r0=2.5, ndays=400, window=14, min_level=1.0, 
+def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, window=14, min_level=1.0, 
     hammer_level=0.89, hammer_durarion=0):
     """Save the basic_paramters.csv file using the data used in the report.
 
@@ -27,7 +27,7 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, r0=2.5, ndays=400, window=14, min_
     basic_prm = pd.Series(dtype=np.float)
     basic_prm["tinc"] = tinc
     basic_prm["tinf"] = tinf
-    basic_prm["r0"] = r0
+    basic_prm["rep"] = rep
     basic_prm["ndays"] = ndays
     basic_prm["window"] = window
     basic_prm["min_level"] = min_level
@@ -37,7 +37,7 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, r0=2.5, ndays=400, window=14, min_
     return basic_prm
 
 
-def initial_conditions(city_data, inf_window, min_days, Julia, correction=1.0):
+def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
     """Fits data and define initial contidions of the SEIR model.
     """
     population = city_data["estimated_population_2019"].iloc[0]
@@ -50,13 +50,17 @@ def initial_conditions(city_data, inf_window, min_days, Julia, correction=1.0):
     observed_I = np.convolve(new_cases, np.ones(7, dtype=int), 'valid') / 7.0
 
     # Now accumulate in the inf_window
+    inf_window = int(round(basic_prm["tinf"]))
     observed_I = np.convolve(observed_I, np.ones(inf_window, dtype=int), 'valid')
 
     ndays = len(observed_I)
     if ndays >= min_days:
         observed_I /= population
         Julia.observed_I = correction*observed_I
-        Julia.eval('initialc = fit_initial(observed_I)')
+        Julia.tinc = basic_prm["tinc"]
+        Julia.tinf = basic_prm["tinf"]
+        Julia.rep = basic_prm["rep"]
+        Julia.eval('initialc = fit_initial(tinc, tinf, rep, observed_I)')
         S0 = Julia.initialc[0]
         E0 = Julia.initialc[1]
         I0 = Julia.initialc[2]
@@ -67,7 +71,7 @@ def initial_conditions(city_data, inf_window, min_days, Julia, correction=1.0):
             (city_data["city"].iloc[0], len(observed_I)))
 
 
-def simulate(parameters, city_data, covid_window, min_days):
+def simulate(parameters, city_data, min_days):
     """Simulate from the computed initial parameters until the last day.
     """
     c = city_data["city"].iloc[0]
@@ -80,7 +84,7 @@ def simulate(parameters, city_data, covid_window, min_days):
     return result[:, -1], last_day
 
 
-def compute_initial_condition_evolve_and_save(large_cities, min_pop, correction, TINF):
+def compute_initial_condition_evolve_and_save(basic_prm, large_cities, min_pop, correction):
     """Compute the initial conditions and population and save it to data/cities_data.csv.
 
     The population andinitial condition is estimated  from a file with the information on
@@ -88,6 +92,8 @@ def compute_initial_condition_evolve_and_save(large_cities, min_pop, correction,
     data/covid_with_cities.csv.
 
     Parameters: large_cities: list with the name of cities tha are pre_selected.
+        basic_prm: basic paramters for SEIR model
+        large_cinties: minimal subset of cities do be selected.
         min_pop: minimal population to select more cities. 
         correction: a constant to multiply the observed cases to try to correct 
             subnotification. 
@@ -112,7 +118,6 @@ def compute_initial_condition_evolve_and_save(large_cities, min_pop, correction,
     epi_data.reset_index(inplace=True, drop=True)
 
     # Compute initial parameters fitting the data
-    inf_window = int(round(TINF))
     min_days = 5    
     parameters = {}
     ignored = []
@@ -124,8 +129,8 @@ def compute_initial_condition_evolve_and_save(large_cities, min_pop, correction,
         print("%d/%d" %(i + 1, n_cities), city_name)
         try:
             city_data = epi_data[epi_data["city"] == city_name]
-            parameters[city_name], observed_I, city_pop = initial_conditions(city_data, 
-                inf_window, min_days, Julia, correction)
+            parameters[city_name], observed_I, city_pop = initial_conditions(basic_prm, 
+                city_data, min_days, Julia, correction)
             population.append(city_pop)
         except ValueError:
             print("Ignoring ", city_name, "not enough data.")
@@ -135,7 +140,7 @@ def compute_initial_condition_evolve_and_save(large_cities, min_pop, correction,
     cities_data = {}
     for city_name in large_cities:
         city_data = epi_data[epi_data["city"] == city_name]
-        cities_data[city_name], last_day = simulate(parameters, city_data, inf_window, min_days)
+        cities_data[city_name], last_day = simulate(parameters, city_data, min_days)
 
     # Save results
     cities_data = pd.DataFrame.from_dict(cities_data, 

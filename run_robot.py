@@ -58,6 +58,9 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif=1
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
 
+    Julia.tinc = basic_prm["tinc"]
+    Julia.tinf = basic_prm["tinf"]
+    Julia.rep = basic_prm["rep"]
     Julia.s1 = cities_data["S0"].values
     Julia.e1 = cities_data["E0"].values
     Julia.i1 = cities_data["I0"].values
@@ -73,18 +76,16 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif=1
     Julia.force_dif = force_dif
     if basic_prm["window"] == 1:
         Julia.eval("""
-            prm = SEIR_Parameters(ndays, s1, e1, i1, r1, 1, out, sparse(M), sparse(M'))
+            prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, 1, out, sparse(M), 
+                                  sparse(M'))
             m = control_multcities(prm, population, target, force_dif, hammer_duration, 
                                    hammer_level, min_level)
         """)
     else:
         Julia.window = basic_prm["window"]
         Julia.eval("""
-            prm = SEIR_Parameters(ndays, s1, e1, i1, r1, window, out, sparse(M), sparse(M'))
-            using JLD
-            save("dados2.jld", "prm", prm, "pop", population, "target", target, 
-            "force_dif", force_dif, "hammer_duration", hammer_duration, 
-            "hammer_level", hammer_level, "min_level", min_level)
+            prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window, out, 
+                                  sparse(M), sparse(M'))
             m = window_control_multcities(prm, population, target, force_dif, 
                                           hammer_duration, hammer_level, min_level);
         """);        
