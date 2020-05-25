@@ -119,6 +119,10 @@ the epidemic is controlled by herd immunity in a city, if necessary.
 
 Copyright Paulo J. S. Silva e Luis Gustavo Nonato. See the [license file](LICENSE.md).
 
+# Funding
+
+This research is supported by CeMEAI/FAPESP, Instituto Serrapilheira, and CNPq.
+
 ## Please Cite Us
 
 We provide this code hoping that it will be useful for others. Please if you use it, let us
