@@ -45,29 +45,16 @@ def initial_conditions(city_data, inf_window, min_days, Julia, correction=1.0):
 
     # Compute the new cases from the confirmed sum
     new_cases = confirmed.values[1:] - confirmed.values[:-1]
-    new_cases = np.append(confirmed.values[0], new_cases)
 
     # Use a mean in a week to smooth the data (specially to deal with weekends)
-    # observed_I = np.convolve(new_cases, np.ones(7, dtype=int), 'valid') / 7.0
+    observed_I = np.convolve(new_cases, np.ones(7, dtype=int), 'valid') / 7.0
 
     # Now accumulate in the inf_window
-    # observed_I = np.convolve(observed_I, np.ones(inf_window, dtype=int), 'valid')
-    observed_I = np.convolve(new_cases, np.ones(inf_window, dtype=int), 'valid')
-    observed_I = np.hstack((confirmed.values[:inf_window], observed_I))
-
-    # TODO: Uncomment lines below and delete lines above.
-    # # Compute the new cases from the confirmed sum
-    # new_cases = confirmed.values[1:] - confirmed.values[:-1]
-
-    # # Use a mean in a week to smooth the data (specially to deal with weekends)
-    # observed_I = np.convolve(new_cases, np.ones(7, dtype=int), 'valid') / 7.0
-
-    # # Now accumulate in the inf_window
-    # observed_I = np.convolve(observed_I, np.ones(inf_window, dtype=int), 'valid')
+    observed_I = np.convolve(observed_I, np.ones(inf_window, dtype=int), 'valid')
 
     ndays = len(observed_I)
     if ndays >= min_days:
-        observed_I = observed_I / population
+        observed_I /= population
         Julia.observed_I = correction*observed_I
         Julia.eval('initialc = fit_initial(observed_I)')
         S0 = Julia.initialc[0]
