@@ -102,6 +102,16 @@ TODO: Add files to describe how desirable is to alternate between any pair of ci
 using the minimum of the squared populations right now) and to turn off alternation after
 the epidemic is controlled by herd immunity in a city, if necessary.
 
+### Computational resources.
+
+The code uses a highly parallel optimization solver to run a large scale optimization
+problem. This demands a good computer. A problem with 20 cities/regiosn can already use
+32Gb of memory even if you limit the mobility matrix to 3 destinies for each city (this is
+what we do). A larger problem, with 50 cities/regions will use more than 64gb of memory and
+demand a very good machine. Also large time horizons (like the 400 days simulations we did
+in he report) are very demanding. The code is not ready to run on a cluster. We will try to
+continously improve the code in order to overcome these limitations.
+
 <!-- * `force_dif.csv`: this file is actually optional. It should contain a matrix with number
   of cities rows and number of days (ndays) columns. At entry (i, j) there must be a 1 (the
   default value) if the method should try to force alternation of city i (with respect to
@@ -119,7 +129,7 @@ the epidemic is controlled by herd immunity in a city, if necessary.
 
 Copyright Paulo J. S. Silva e Luis Gustavo Nonato. See the [license file](LICENSE.md).
 
-# Funding
+## Funding
 
 This research is supported by CeMEAI/FAPESP, Instituto Serrapilheira, and CNPq.
 
