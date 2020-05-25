@@ -11,6 +11,8 @@ import pylab as plt
 from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
 
+import prepare_data
+
 # To use PyJulia
 from julia.api import Julia
 jl = Julia(compiled_modules=False)
@@ -24,14 +26,20 @@ def get_options():
     '''
     parser = OptionParser()
     parser.add_option("--basic_parameters", dest="basic_prm",
-                      default=path.join("data", "basic_paramters.csv"),
+                      default=path.join("data", "basic_parameters.csv"),
                       help="Basic parameters of the SEIR model [default: %default]")
     parser.add_option("--cities_data", dest="cities_data",
                       default=path.join("data", "cities_data.csv"),
                       help="Population and initial state of the cities [default: %default]")
+    parser.add_option("--pre_cities_data", dest="pre_cities_data",
+                      default=path.join("data", "pre_cities_data.csv"),
+                      help="Population and initial state of the cities [default: %default]")
     parser.add_option("--mobility_matrix", dest="mobility_matrix",
                       default=path.join("data", "mobility_matrix.csv"),
                       help="Mobility information [default: %default]")
+    parser.add_option("--target", dest="target",
+                      default=path.join("data", "target.csv"),
+                      help="Maximal infected allowed [default: %default]")
     options, dummy_args = parser.parse_args()
     return options
 
@@ -40,17 +48,22 @@ def read_data(options):
     '''Read data from default files and locations.
     '''
     basic_prm = pd.read_csv(options.basic_prm, header=None, index_col=0, squeeze=True)
-    cities_data = pd.read.csv(options.cities_data)
+    if path.exists(options.cities_data):
+        cities_data = pd.read_csv(options.cities_data, index_col=0)
+    else:
+        cities_data = prepare_data.compute_initial_condition_evolve_and_save(
+            basic_prm, None, [], 0, 1, options.pre_cities_data)
+    target = pd.read_csv(options.target, index_col=0)
     if path.exists(options.mobility_matrix):
-        mob_matrix = pd.read_csv(options.mobility_matrix)
+        mob_matrix = pd.read_csv(options.mobility_matrix, index_col=0)
         assert np.alltrue(mob_matrix.index == cities_data.index), \
             "Different cities in cities data and mobility matrix."
     else:
         ncities = len(cities_data)
-        mob_matrix = pd.DataFrame(data=zeros((ncities, ncities)), index=cities_data.index, 
-            columns=cities_data.index)
+        mob_matrix = pd.DataFrame(data=np.zeros((ncities, ncities)), 
+            index=cities_data.index, columns=cities_data.index)
 
-    return basic_prm, cities_data, mob_matrix
+    return basic_prm, cities_data, mob_matrix, target
 
 
 def prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif=1):
@@ -61,10 +74,10 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif=1
     Julia.tinc = basic_prm["tinc"]
     Julia.tinf = basic_prm["tinf"]
     Julia.rep = basic_prm["rep"]
-    Julia.s1 = cities_data["S0"].values
-    Julia.e1 = cities_data["E0"].values
-    Julia.i1 = cities_data["I0"].values
-    Julia.r1 = cities_data["R0"].values
+    Julia.s1 = cities_data["S1"].values
+    Julia.e1 = cities_data["E1"].values
+    Julia.i1 = cities_data["I1"].values
+    Julia.r1 = cities_data["R1"].values
     Julia.population = cities_data["population"].values
     Julia.out = mob_matrix["out"].values
     Julia.M = mob_matrix.values[:, :-1]
@@ -132,11 +145,19 @@ def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities):
     plt.title("Infection level")
     plt.savefig(i_fig)
 
-    save_result(large_cities, data_file)   
+    save_result(large_cities, data_file)
 
+
+def main():
+    """Allow call from the command line.
+    """
+    options = get_options()
+    basic_prm, cities_data, mob_matrix, target = read_data(options)
+    ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
+    force_dif = np.ones((ncities, ndays))
+    prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif)
+    optimize_and_show_results("results/cmd_i_new.png", "results/cmd_rt_new.png",
+                              "results/cmd_new.csv", cities_data.index)
 
 if __name__ == "__main__":
-    options = get_options()
-    basic_prm, cities_data, mob_matrix = read_data(options)
-
-
+    main()

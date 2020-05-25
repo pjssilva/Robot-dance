@@ -61,11 +61,11 @@ def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
         Julia.tinf = basic_prm["tinf"]
         Julia.rep = basic_prm["rep"]
         Julia.eval('initialc = fit_initial(tinc, tinf, rep, observed_I)')
-        S0 = Julia.initialc[0]
-        E0 = Julia.initialc[1]
-        I0 = Julia.initialc[2]
-        R0 = Julia.initialc[3]
-        return (S0, E0, I0, R0, ndays), observed_I, population
+        S1 = Julia.initialc[0]
+        E1 = Julia.initialc[1]
+        I1 = Julia.initialc[2]
+        R1 = Julia.initialc[3]
+        return (S1, E1, I1, R1, ndays), observed_I, population
     else:
         raise ValueError("Not enough data for %s only %d days available" % 
             (city_data["city"].iloc[0], len(observed_I)))
@@ -77,14 +77,15 @@ def simulate(parameters, city_data, min_days):
     c = city_data["city"].iloc[0]
     last_day = city_data["date"].iloc[-1]
 
-    S0, E0, I0, R0, ndays = parameters[c]
+    S1, E1, I1, R1, ndays = parameters[c]
     covid = seir.seir(ndays)
     print("Simulating", c, "until", last_day)
-    result = covid.run((S0,E0,I0,R0))
+    result = covid.run((S1, E1, I1, R1))
     return result[:, -1], last_day
 
 
-def compute_initial_condition_evolve_and_save(basic_prm, large_cities, min_pop, correction):
+def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, min_pop, correction,
+    raw_name="data/covid_with_cities.csv"):
     """Compute the initial conditions and population and save it to data/cities_data.csv.
 
     The population andinitial condition is estimated  from a file with the information on
@@ -92,16 +93,18 @@ def compute_initial_condition_evolve_and_save(basic_prm, large_cities, min_pop, 
     data/covid_with_cities.csv.
 
     Parameters: large_cities: list with the name of cities tha are pre_selected.
-        basic_prm: basic paramters for SEIR model
+        basic_prm: basic paramters for SEIR model.
+        state: state to subselect or None.
         large_cinties: minimal subset of cities do be selected.
         min_pop: minimal population to select more cities. 
         correction: a constant to multiply the observed cases to try to correct 
             subnotification. 
-        TINF: Time of infection, should be equal to the tinf value in the 
-            basic_parameters.csv file.
+        raw_name: name of the file with the accumulated infected data to estimate the
+            initial conditions.
     """
-    raw_epi_data = pd.read_csv("data/covid_with_cities.csv")
-    raw_epi_data = raw_epi_data[raw_epi_data["state"] == "SP"]
+    raw_epi_data = pd.read_csv(raw_name)
+    if state is not None:
+        raw_epi_data = raw_epi_data[raw_epi_data["state"] == state]
     large_cities.extend(
         raw_epi_data[raw_epi_data["estimated_population_2019"] > min_pop]["city"].unique()
     )
@@ -144,11 +147,9 @@ def compute_initial_condition_evolve_and_save(basic_prm, large_cities, min_pop, 
 
     # Save results
     cities_data = pd.DataFrame.from_dict(cities_data, 
-        orient="index", columns=["S0", "E0", "I0", "R0"])
+        orient="index", columns=["S1", "E1", "I1", "R1"])
     cities_data["population"] = population
-    with open('data/cities_data.csv', 'w') as f:
-        f.write("# Initial condition for " + str(last_day) + "\n")
-        cities_data.to_csv(f)
+    cities_data.to_csv(path.join("data", "cities_data.csv"))
     return cities_data
 
 

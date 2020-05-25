@@ -50,7 +50,7 @@ It expects 4 input files:
   `<parameter name>, <paramter values>`. The parameters are:
     * `tinc`: Incubation time for the SEIR Model (default 5.2).
     * `tinf`: Infected time for SEIR model (default 2.9).
-    * `r0`: reproduction rate of the virus without mitigation (default 2.5)
+    * `rep`: reproduction rate of the virus without mitigation (default 2.5)
     * `ndays`: number of days to be considered in the simulation.
     * `window`: number of days to keep the mitigation level constant.
     * `min_level`: what is the r0 attainable using the most demanding mitigation.
@@ -59,11 +59,23 @@ It expects 4 input files:
 
 * `cities_data.csv`: basic cities data in CSV format. It must contain one line per city,
   with the city name as index and the following named columns:
-    * `s0`: initial value for the S variable in the SEIR model.
-    * `e0`: initial value for the E variable in the SEIR model.
-    * `i0`: initial value for the I variable in the SEIR model.
-    * `r0`: initial value for the R variable in the SEIR model.
-    * `population`: population of the city.
+    * `S1`: initial value for the S variable in the SEIR model.
+    * `E1`: initial value for the E variable in the SEIR model.
+    * `I1`: initial value for the I variable in the SEIR model.
+    * `R1`: initial value for the R variable in the SEIR model.
+    * `population`: population of the city. 
+    
+  Alternatively to this file, the user can make available the information with the
+  (cummulated) number of infected to estimate the initial data `S1, E1, I1, R1`. This file
+  shoulbe named `pre_cities_data.csv` with columns labeled:
+    * `city`: the city name. 
+    * `state`: the state code if you want to select by state (or a neutral string).
+    * `date`: a date where the accumulated infected was measured, they have to be made 
+       daily from the start of the data for `city` up to a final common day. 
+    * `confirmed`: the *accumulated* number of confirmed cases.
+    * `estimated_population_2019`: contains the estimated population of the city (the
+       same number repeated). 
+  The file can have other columns, but only those will be used by the program.
 
 * `mobility_matrix.csv`: the mobility matrix, with labels and index using the cities names.
   The cities must be the same cities that appear in `cities_data.csv` and in the same
