@@ -156,8 +156,8 @@ def main():
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     force_dif = np.ones((ncities, ndays))
     prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif)
-    optimize_and_show_results("results/cmd_i_new.png", "results/cmd_rt_new.png",
-                              "results/cmd_new.csv", cities_data.index)
+    optimize_and_show_results("results/cmd_i_res.png", "results/cmd_rt_res.png",
+                              "results/cmd_res.csv", cities_data.index)
 
 if __name__ == "__main__":
     main()

@@ -44,7 +44,7 @@ After that install [PyJulia](https://github.com/JuliaPy/pyjulia).
 
 To run the basic model described in the report on a problem instance run the Python code
 `run_robot.py`. This code expects the input files to be located in the `data` sub-directory.
-It expects 4 input files:
+It expects 4 input files in the subdirectory `data`:
 
 * `basic_paramters.csv`: simple CSV file with basic parameters, one per line in the format
   `<parameter name>, <paramter values>`. The parameters are:
@@ -90,6 +90,13 @@ It expects 4 input files:
 * `target.csv`: a matrix with the maximal amount of infected that is acceptable for each
   cities (as rows) at each day (as columns). The city names should be used as index and
   consecutive numbers from 1 to `ndays`as column labels. 
+
+After you have all the files in place with the right names, you can run the code with
+`python run_robot.py` the result will be made available in a file named
+`results/cmd_res.csv`. It has the simulated values for the SEIR variables and the target
+reproducible number at each day, labeled `rt`, for each city. You can also find two
+pictures that help you quicly visualize the curves `results/cmd_i_res.png` and
+`results/cmd_rt_new.png`.
 
 TODO: Add files to describe how desirable is to alternate between any pair of cities (I am
 using the minimum of the squared populations right now) and to turn off alternation after
