@@ -10,7 +10,6 @@ Copyright: Paulo J. S. Silva <pjssilva@unicamp.br>, 2020.
 using JuMP
 using Ipopt
 using Printf
-using Plots
 using LinearAlgebra
 using SparseArrays
 import Statistics.mean
@@ -137,8 +136,11 @@ function seir_model_with_free_initial_values(prm)
     coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
 
     # Create the optimization model.
+    # I am reverting to mumps because I can not limit ma97 to use
+    # only the actual cores in my machine and mumps seems to be doing 
+    # fine.
     m = Model(optimizer_with_attributes(Ipopt.Optimizer,
-        "print_level" => 5, "linear_solver" => "ma97"))
+        "print_level" => 5, "linear_solver" => "mumps"))
     # For simplicity I am assuming that one step per day is OK.
     dt = 1.0
 

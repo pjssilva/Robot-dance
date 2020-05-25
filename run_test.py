@@ -16,7 +16,9 @@ rcParams['figure.figsize'] = 14, 7
 from julia.api import Julia
 jl = Julia(compiled_modules=False)
 from julia import Main as Julia
+Julia.eval('ENV["OMP_NUM_THREADS"] = 8')
 Julia.eval('include("robot_dance.jl")')
+
 
 # Configuration
 # Warning: the two constants below have to be the same used in the optimization code.
@@ -30,8 +32,8 @@ def initial_conditions(city, covid_data, covid_window, min_days, Julia, correcti
     """
     # Gets the city data
     city_data = covid_data[covid_data["city"] == city].copy()
-    city_data.reset_index(inplace=True)
     city_data.sort_values(by=["date"], inplace=True)
+    city_data.reset_index(inplace=True)
     population = city_data["estimated_population_2019"].iloc[0]
     confirmed = city_data["confirmed"]
 
