@@ -442,6 +442,12 @@ function window_control_multcities(prm, population, target, force_difference,
         # Try to keep as many people working as possible
         prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
+        # Try to alternate with a single city.
+        prm.window/(prm.rep^2)*sum(
+            force_difference[c, d]*(rt[c, d] - rt[c, d - prm.window])^2 
+            for c = 1:prm.ncities 
+            for d = hammer_duration + prm.window + 1:prm.window:prm.ndays
+        ) -
         # Try to enforce different cities to alternate the controls
         10.0*prm.window/(prm.rep^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
