@@ -47,7 +47,13 @@ def get_options():
 def read_data(options):
     '''Read data from default files and locations.
     '''
-    basic_prm = pd.read_csv(options.basic_prm, header=None, index_col=0, squeeze=True)
+    if path.exists(optimize_and_show_results.basic_prm):
+        basic_prm = pd.read_csv(options.basic_prm, header=None, index_col=0, squeeze=True)
+    else:
+        print("The file basic_parameters.csv is missing.")
+        print("Using one with the default values from the report.")
+        basic_prm = prepare_data.save_basic_parameters()
+        
     if path.exists(options.cities_data):
         cities_data = pd.read_csv(options.cities_data, index_col=0)
     else:
