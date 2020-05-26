@@ -47,7 +47,7 @@ def get_options():
 def read_data(options):
     '''Read data from default files and locations.
     '''
-    if path.exist(options.basic_prm):
+    if path.exists(options.basic_prm):
         basic_prm = pd.read_csv(options.basic_prm, header=None, index_col=0, squeeze=True)
     else:
         print("The file basic_parameters.csv is missing.")
@@ -59,7 +59,16 @@ def read_data(options):
     else:
         cities_data = prepare_data.compute_initial_condition_evolve_and_save(
             basic_prm, None, [], 0, 1, options.pre_cities_data)
-    target = pd.read_csv(options.target, index_col=0)
+
+    if path.exists(options.target):
+        target = pd.read_csv(options.target, index_col=0)
+    else:
+        print("Target for infected does not exits, usint 1%.")
+        ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
+        target = 0.01*np.ones((ncities, ndays))
+        target = prepare_data.save_target(cities_data, target)
+
+    
     if path.exists(options.mobility_matrix):
         mob_matrix = pd.read_csv(options.mobility_matrix, index_col=0)
         assert np.alltrue(mob_matrix.index == cities_data.index), \
@@ -68,6 +77,7 @@ def read_data(options):
         ncities = len(cities_data)
         mob_matrix = pd.DataFrame(data=np.zeros((ncities, ncities)), 
             index=cities_data.index, columns=cities_data.index)
+        mob_matrix["out"] = np.zeros(ncities)
 
     return basic_prm, cities_data, mob_matrix, target
 
