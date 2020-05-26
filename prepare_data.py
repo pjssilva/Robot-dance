@@ -18,7 +18,7 @@ Julia.eval('include("robot_dance.jl")')
 
 
 def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, window=14, min_level=1.0, 
-    hammer_level=0.89, hammer_durarion=0):
+    hammer_level=0.89, hammer_duration=0):
     """Save the basic_paramters.csv file using the data used in the report.
 
        All values are optional. If not present the values used in the report wihtout
@@ -32,7 +32,7 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, window=14, min
     basic_prm["window"] = window
     basic_prm["min_level"] = min_level
     basic_prm["hammer_level"] = hammer_level
-    basic_prm["hammer_duration"] = hammer_durarion
+    basic_prm["hammer_duration"] = hammer_duration
     basic_prm.to_csv(path.join("data", "basic_parameters.csv"), header=False)
     return basic_prm
 
