@@ -19,19 +19,13 @@ This code is written in [Julia](https://www.julialang.org) and
 [Python](https://www.python.org), so you need both installed. To install Julia you should
 go to its website, select download and follow instructions. After installing Julia you need
 to use its package manager and install the `JuMP` and `Ipopt` packages. 
-<!-- I am using MUMPS for now, I could not get ma97 to use only 8 core. I have to test more 
-options.
-To get good
-performance out of Ipopt, which is essential, you will need to compile it with support to
-[HSL](http://www.hsl.rl.ac.uk) linear solvers. I use MA97 in the code. If you don't have
-access to HSL linear solvers you can revert to the default open source solver mumps by
-editing deleting `, "linear_solver" => "ma97"` from the `robot_dance.jl` file. Look for the
-excerpt below. 
-```julia
-    m = Model(optimizer_with_attributes(Ipopt.Optimizer,
-        "print_level" => 5, "linear_solver" => "ma97"))
-``` 
--->
+
+To get good performance out of Ipopt, it is very important to use a high performance linear
+solver. The default free solver, `mumps` works well for 10 cities or so. If you want to
+solve larger problems with tens of cities you will need to compile Ipopt with support to
+[HSL](http://www.hsl.rl.ac.uk) linear solvers. Robot dance uses MA97 in the code whenever
+available. I have also prepared a little [document](compiling_ipopt.md) describing how to
+compile Ipopt with HSL under Ubuntu.
 
 There are many ways to install Python. I use
 [Anaconda](https://www.anaconda.com/products/individual). By installing Anaconda you get a

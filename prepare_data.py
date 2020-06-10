@@ -54,7 +54,7 @@ def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
     observed_I = np.convolve(observed_I, np.ones(inf_window, dtype=int), 'valid')
 
     ndays = len(observed_I)
-    if ndays >= min_days:
+    if ndays >= min_days and sum(observed_I) > 0:
         observed_I /= population
         Julia.observed_I = correction*observed_I
         Julia.tinc = basic_prm["tinc"]
@@ -108,6 +108,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     large_cities.extend(
         raw_epi_data[raw_epi_data["estimated_population_2019"] > min_pop]["city"].unique()
     )
+    large_cities = list(set(large_cities))
     large_cities.sort()
 
     # Create a new Dataframe with only the needed information
@@ -142,6 +143,8 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     # Simulate the data until the last day to start the optimization phase.
     cities_data = {}
     for city_name in large_cities:
+        if city_name in ignored:
+            continue
         city_data = epi_data[epi_data["city"] == city_name]
         cities_data[city_name], last_day = simulate(parameters, city_data, min_days)
 

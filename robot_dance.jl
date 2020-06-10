@@ -120,6 +120,27 @@ end
 
 
 """
+    best_linear_solver
+
+    Helper function to check what is the best linear solver available for Ipopt, 
+        ma97 (preferred) or mumps.
+"""
+function best_linear_solver()
+    PREFERRED = "ma97"
+    m = Model(optimizer_with_attributes(Ipopt.Optimizer,
+              "print_level" => 0, "linear_solver" => PREFERRED))
+    @variable(m, x)
+    @objective(m, Min, x^2)
+    optimize!(m)
+    if termination_status(m) != MOI.INVALID_OPTION
+        return PREFERRED
+    else
+        return "mumps"
+    end
+end
+
+
+"""
     seir_model_with_free_initial_value(prm)
 
 Build an optimization model with the SEIR discretization as constraints. The inicial
@@ -136,7 +157,7 @@ function seir_model_with_free_initial_values(prm)
     # only the actual cores in my machine and mumps seems to be doing 
     # fine.
     m = Model(optimizer_with_attributes(Ipopt.Optimizer,
-        "print_level" => 5, "linear_solver" => "mumps"))
+        "print_level" => 5, "linear_solver" => best_linear_solver()))
     # For simplicity I am assuming that one step per day is OK.
     dt = 1.0
 
@@ -149,17 +170,23 @@ function seir_model_with_free_initial_values(prm)
 
     # Control variable
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
-
+    
+    # Extra variables to better separate linear and nonlinear expressions and
+    # to decouple and "sparsify" the matrices.
+    # Obs. I tried many variations, only adding the variable below worded the best.
+    #      I tried to get rid of all SEIR variables and use only the initial conditions.
+    #      Add variables for sp, ep, ip, rp. Add a variable to represent s times i.
+    @variable(m, 0.1 <= p_day[1:prm.ncities, t=1:prm.ndays])
     # Expressions that define "sub-states"
 
     # enter denotes the proportion of the population that enter city c during
     # the day.
-    @NLexpression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
+    @expression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
         sum(prm.M[k, c]*(1.0 - i[k, t]) for k in coli_M[c])
     )
     # p_day is the ratio that the population of a city varies during the day
-    @NLexpression(m, p_day[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0 - prm.out[c]) + prm.out[c]*i[c, t] + enter[c, t]
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        p_day[c, t] == (1.0 - prm.out[c]) + prm.out[c]*i[c, t] + enter[c, t]
     )
 
     # Parameter that measures how much important is the infection during the day
