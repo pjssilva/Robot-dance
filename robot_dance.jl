@@ -141,13 +141,13 @@ end
 
 
 """
-    seir_model_with_free_initial_value(prm)
+    nonlinear_seir_model_with_free_initial_value(prm)
 
 Build an optimization model with the SEIR discretization as constraints. The inicial
 parameters are not initialized and remain free. This can be useful, for example, to fit the
 initial parameters to observed data.
 """
-function seir_model_with_free_initial_values(prm)
+function nonlinear_seir_model_with_free_initial_values(prm)
     # Save work and get col indices of both M and Mt
     coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
     coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
@@ -177,6 +177,7 @@ function seir_model_with_free_initial_values(prm)
     #      I tried to get rid of all SEIR variables and use only the initial conditions.
     #      Add variables for sp, ep, ip, rp. Add a variable to represent s times i.
     @variable(m, 0.1 <= p_day[1:prm.ncities, t=1:prm.ndays])
+
     # Expressions that define "sub-states"
 
     # enter denotes the proportion of the population that enter city c during
@@ -206,7 +207,7 @@ function seir_model_with_free_initial_values(prm)
         -1.0/prm.tinf*(
          α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*s[c, t]*i[c, t]/p_day[c, t] +
              t1[c, t] ) +
-         (1 - α)*rt[c, mapind(t, prm)]*s[c, t]*i[c, mapind(t, prm)])
+         (1 - α)*rt[c, mapind(t, prm)]*s[c, t]*i[c, t])
     )
     @NLexpression(m, de[c=1:prm.ncities, t=1:prm.ndays],
         -ds[c, t] - (1.0/prm.tinc)*e[c,t]
@@ -261,6 +262,150 @@ function seir_model_with_free_initial_values(prm)
 
     return m
 end
+
+
+"""
+    quadratic_seir_model_with_free_initial_value(prm)
+
+Build an optimization model with the SEIR discretization as constraints. The inicial
+parameters are not initialized and remain free. This can be useful, for example, to fit the
+initial parameters to observed data.
+"""
+function quadratic_seir_model_with_free_initial_values(prm)
+    # Save work and get col indices of both M and Mt
+    coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
+    coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
+
+    # Create the optimization model.
+    # I am reverting to mumps because I can not limit ma97 to use
+    # only the actual cores in my machine and mumps seems to be doing 
+    # fine.
+    m = Model(optimizer_with_attributes(Ipopt.Optimizer,
+        "print_level" => 5, "linear_solver" => best_linear_solver()))
+    # For simplicity I am assuming that one step per day is OK.
+    dt = 1.0
+
+    # Note that I do not fix the initial state. It should be defined elsewhere.
+    # State variables
+    @variable(m, 0.0 <= s[1:prm.ncities, 1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= e[1:prm.ncities, 1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= i[1:prm.ncities, 1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= r[1:prm.ncities, 1:prm.ndays] <= 1.0)
+
+    # Control variable
+    @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
+    
+    # Extra variables to better separate linear and nonlinear expressions and
+    # to decouple and "sparsify" the matrices.
+    # Obs. I tried many variations, only adding the variable below worded the best.
+    #      I tried to get rid of all SEIR variables and use only the initial conditions.
+    #      Add variables for sp, ep, ip, rp. Add a variable to represent s times i.
+    @variable(m, 0.1 <= p_day[1:prm.ncities, t=1:prm.ndays])
+    @variable(m, 0.0 <= si[1:prm.ncities, t=1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= spip[1:prm.ncities, t=1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= si_p_day[1:prm.ncities, t=1:prm.ndays])
+    @variable(m, 0.0 <= spip_p_day[1:prm.ncities, t=1:prm.ndays])
+    @variable(m, 0.0 <= sp[1:prm.ncities, 2:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= ep[1:prm.ncities, 2:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= ip[1:prm.ncities, 2:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= rp[1:prm.ncities, 2:prm.ndays] <= 1.0)
+
+    # Expressions that define "sub-states"
+
+    # enter denotes the proportion of the population that enter city c during
+    # the day.
+    @expression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
+        sum(prm.M[k, c]*(1.0 - i[k, t]) for k in coli_M[c])
+    )
+    # p_day is the ratio that the population of a city varies during the day
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        p_day[c, t] == (1.0 - prm.out[c]) + prm.out[c]*i[c, t] + enter[c, t]
+    )
+
+    # Parameter that measures how much important is the infection during the day
+    # when compared to the night.
+    α = 2/3
+
+    # Implement a vectorized version of Heun's method.
+
+    # Compute the gradients at time t of the SEIR model.
+
+    # Estimates the infection rate of the susceptible people from city c
+    # that went to the other cities k.
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        si[c, t] == s[c, t]*i[c, t])
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        si_p_day[c, t]*p_day[c,t] == si[c, t])
+    @expression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
+        sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*si_p_day[k, t] for k = coli_Mt[c])
+    )
+    @expression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
+        -1.0/prm.tinf*(
+         α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*si_p_day[c, t] +
+             t1[c, t] ) +
+         (1 - α)*rt[c, mapind(t, prm)]*si[c, t])
+    )
+    @expression(m, de[c=1:prm.ncities, t=1:prm.ndays],
+        -ds[c, t] - (1.0/prm.tinc)*e[c,t]
+    )
+    @expression(m, di[c=1:prm.ncities, t=1:prm.ndays],
+        (1.0/prm.tinc)*e[c, t] - (1.0/prm.tinf)*i[c, t]
+    )
+    @expression(m, dr[c=1:prm.ncities, t=1:prm.ndays],
+        (1.0/prm.tinf)*i[c, t]
+    )
+
+    # Do the Euler step from the point in time t - 1 computing the intermediate
+    # point that we express as ?p (p is for plus).
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], sp[c, t] == s[c, t - 1] + ds[c, t - 1]*dt)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ep[c, t] == e[c, t - 1] + de[c, t - 1]*dt)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ip[c, t] == i[c, t - 1] + di[c, t - 1]*dt)
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], rp[c, t] == r[c, t - 1] + dr[c, t - 1]*dt)
+
+    # Compute the gradients in the intermediate point.
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        spip[c, t] == sp[c, t]*ip[c, t])
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        spip_p_day[c, t]*p_day[c,t] == spip[c, t])
+    @expression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
+        sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*spip_p_day[k, t] for k = coli_Mt[c])
+    )
+    @expression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
+        -1.0/prm.tinf*(
+        α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*spip_p_day[c, t] +
+            t2[c, t] ) +
+        (1 - α)*rt[c, mapind(t, prm)]*spip[c, t])
+    )
+    @expression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
+        -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
+    )
+    @expression(m, dip[c=1:prm.ncities, t=2:prm.ndays],
+        (1.0/prm.tinc)*ep[c, t] - (1.0/prm.tinf)*ip[c, t]
+    )
+    @expression(m, drp[c=1:prm.ncities, t=2:prm.ndays],
+        (1.0/prm.tinf)*ip[c, t]
+    )
+
+    # Perform a Heun's update
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt
+    )
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt
+    )
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt
+    )
+    @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+        r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt
+    )
+
+    return m
+end
+
+
+# Defines de default variation: the quadratic version
+const seir_model_with_free_initial_value = quadratic_seir_model_with_free_initial_values
 
 
 """

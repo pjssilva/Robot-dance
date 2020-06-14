@@ -157,7 +157,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
 
 
 def convert_mobility_matrix_and_save(cities_data, max_neighbors):
-    """Read the mobile matrix data given by Pedro and save it in the format needed by
+    """Read the mobility matrix data given by Pedro and save it in the format needed by
        robot_dance.
 
        cd: a data frame in the format of cities_data.csv

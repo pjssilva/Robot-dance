@@ -17,7 +17,6 @@ import prepare_data
 from julia.api import Julia
 jl = Julia(compiled_modules=False)
 from julia import Main as Julia
-Julia.eval('ENV["OMP_NUM_THREADS"] = 8')
 Julia.eval('include("robot_dance.jl")')
 
 
