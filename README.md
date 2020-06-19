@@ -99,25 +99,13 @@ the epidemic is controlled by herd immunity in a city, if necessary.
 ### Computational resources.
 
 The code uses a highly parallel optimization solver to run a large scale optimization
-problem. This demands a good computer. A problem with 20 cities/regiosn can already use
-32Gb of memory even if you limit the mobility matrix to 3 destinies for each city (this is
-what we do). A larger problem, with 50 cities/regions will use more than 64gb of memory and
-demand a very good machine. Also large time horizons (like the 400 days simulations we did
-in he report) are very demanding. The code is not ready to run on a cluster. We will try to
-continously improve the code in order to overcome these limitations.
-
-<!-- * `force_dif.csv`: this file is actually optional. It should contain a matrix with number
-  of cities rows and number of days (ndays) columns. At entry (i, j) there must be a 1 (the
-  default value) if the method should try to force alternation of city i (with respect to
-  the other cities) at day j and 0 otherwise. The row index should be the city name, and
-  the column indexes the day number from 1. Once again the cities have to appear in the
-  same order as they appeared in the `cities_data.csv` file. The idea is to turn off
-  alternation after the number of recovered in a city is high enough to induce the end of
-  epidemic without any special mitigation. This should be used after a initial run if you
-  see the method forcing a city that has already achieved herd immunity to alternate.
-  Ideally we should no need this, but the natural way to avoid it is to introduce decision
-  variables (binary variables) in the optimization problem, which would make it
-  impractical. If not present, it is assumed to be all ones.  -->
+problem, named Ipopt, which is installed as a Julia package. This demands a good computer.
+A problem with more than 10-20 cities/regions the solver may face difficulties and stall.
+In order to avoid this you may need to install Ipopt with HSL. HSL is free for research.
+Please look at these [instructions of how to compile Ipopt](compiling_ipopt.md) if needed.
+Also long time horizons (like the 400 days simulations we did in he report) are very
+demanding. The code is not ready to run on a cluster. We will try to continuously improve
+the code in order to overcome these limitations.
 
 ## Copyright 
 
