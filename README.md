@@ -38,7 +38,7 @@ After that install [PyJulia](https://github.com/JuliaPy/pyjulia).
 
 To run the basic model described in the report on a problem instance run the Python code
 `run_robot.py`. This code expects the input files to be located in the `data` sub-directory.
-It expects 4 input files in the subdirectory `data`:
+It expects 4 input files in the subfolder `data`:
 
 * `basic_paramters.csv`: simple CSV file with basic parameters, one per line in the format
   `<parameter name>, <paramter values>`. The parameters are:
@@ -60,8 +60,8 @@ It expects 4 input files in the subdirectory `data`:
     * `population`: population of the city. 
     
   Alternatively to this file, the user can make available the information with the
-  (cummulated) number of infected to estimate the initial data `S1, E1, I1, R1`. This file
-  shoulbe named `pre_cities_data.csv` with columns labeled:
+  (accumulated) number of infected to estimate the initial data `S1, E1, I1, R1`. This file
+  should be named `pre_cities_data.csv` with columns labeled:
     * `city`: the city name. 
     * `state`: the state code if you want to select by state (or a neutral string).
     * `date`: a date where the accumulated infected was measured, they have to be made 
