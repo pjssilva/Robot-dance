@@ -405,7 +405,7 @@ end
 
 
 # Defines de default variation: the quadratic version
-const seir_model_with_free_initial_value = quadratic_seir_model_with_free_initial_values
+const seir_model_with_free_initial_values = quadratic_seir_model_with_free_initial_values
 
 
 """
@@ -614,6 +614,9 @@ function window_control_multcities(prm, population, target, force_difference,
         # Try to keep as many people working as possible
         prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
+        0.1*prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])*(min_rt - rt[c, d])
+        for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
+    
         # Try to alternate with a single city.
         prm.window/(prm.rep^2)*sum(
             force_difference[c, d]*(rt[c, d] - rt[c, d - prm.window])^2 
