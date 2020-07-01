@@ -126,7 +126,8 @@ end
         ma97 (preferred) or mumps.
 """
 function best_linear_solver()
-    PREFERRED = "ma97"
+    # PREFERRED = "ma97"
+    PREFERRED = "mumps"
     m = Model(optimizer_with_attributes(Ipopt.Optimizer,
               "print_level" => 0, "linear_solver" => PREFERRED))
     @variable(m, x)
@@ -500,34 +501,34 @@ day for every city using daily controls with small total variation.
 """
 function control_multcities(prm, population, target, force_difference, hammer_duration=0,
     hammer=0.89, min_rt=1.0)
-    @assert mod(hammer_duration, prm.window) == 0
+    @assert sum(mod.(hammer_duration[c], prm.window)) == 0
 
     m = seir_model(prm)
 
     # Fix rt during hammer phase
     rt = m[:rt]
-    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration
-        fix(rt[c, d], hammer; force=true)
+    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration[c]
+        fix(rt[c, d], hammer[c]; force=true)
     end
 
     # Set the minimum rt achievable after the hammer phase.
-    for c = 1:prm.ncities, d = hammer_duration + 1:prm.window:prm.ndays
+    for c = 1:prm.ncities, d = hammer_duration[c] + 1:prm.window:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
     # Compute the total variation of the control rt
     rt = m[:rt]
-    @variable(m, tot_var[c=1:prm.ncities, t=hammer_duration + prm.window + 1:prm.window:prm.ndays])
-    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration + prm.window + 1:prm.window:prm.ndays],
+    @variable(m, tot_var[c=1:prm.ncities, t=hammer_duration[c] + prm.window + 1:prm.window:prm.ndays])
+    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration[c] + prm.window + 1:prm.window:prm.ndays],
         rt[c, t - prm.window] - rt[c, t] <= tot_var[c, t]
     )
-    @constraint(m, tot_var2[c=1:prm.ncities, t=hammer_duration + 2:prm.ndays],
+    @constraint(m, tot_var2[c=1:prm.ncities, t=hammer_duration[c] + 2:prm.ndays],
         rt[c, t] - rt[c, t - prm.window] <= tot_var[c, t]
     )
 
     # Constraint on maximum level of infection
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], 
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration[c] + 1:prm.ndays], 
         i[c, t] <= target[c, t]
     )
 
@@ -542,7 +543,7 @@ function control_multcities(prm, population, target, force_difference, hammer_du
     @objective(m, Min,
         # Try to keep life as normal as possible
         sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration + 1:prm.window:prm.ndays) +
+            for c = 1:prm.ncities for d = hammer_duration[c] + 1:prm.window:prm.ndays) +
         # Avoid large variations
         sum(tot_var) -
         # Try to enforce different cities to alternate the controls
@@ -552,7 +553,7 @@ function control_multcities(prm, population, target, force_difference, hammer_du
             (rt[c, d] - rt[cl, d])^2
             for c = 1:prm.ncities 
             for cl = c + 1:prm.ncities 
-            for d = hammer_duration + 1:prm.window:prm.ndays
+            for d = hammer_duration[c] + 1:prm.window:prm.ndays
         )
     )
 
@@ -581,24 +582,24 @@ time windows.
 """
 function window_control_multcities(prm, population, target, force_difference, 
     hammer_duration=0, hammer=0.89, min_rt=1.0)
-    @assert mod(hammer_duration, prm.window) == 0
+    @assert sum(mod.(hammer_duration, prm.window)) == 0
 
     m = seir_model(prm)
 
     # Fix rt during hammer phase
     rt = m[:rt]
-    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration
-        fix(rt[c, d], hammer; force=true)
+    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration[c]
+        fix(rt[c, d], hammer[c]; force=true)
     end
 
     # Set the minimum rt achievable after the hammer phase.
-    for c = 1:prm.ncities, d = hammer_duration + 1:prm.window:prm.ndays
+    for c = 1:prm.ncities, d = hammer_duration[c] + 1:prm.window:prm.ndays
         set_lower_bound(rt[c, d], min_rt)
     end
 
     # Bound the maximal infection rate
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays], 
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration[c] + 1:prm.ndays], 
         i[c, t] <= target[c, t]
     )
 
@@ -613,15 +614,15 @@ function window_control_multcities(prm, population, target, force_difference,
     @objective(m, Min,
         # Try to keep as many people working as possible
         prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
+            for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
         0.1*prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])*(min_rt - rt[c, d])
-        for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
+        for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
     
         # Try to alternate with a single city.
         prm.window/(prm.rep^2)*sum(
             force_difference[c, d]*(rt[c, d] - rt[c, d - prm.window])^2 
             for c = 1:prm.ncities 
-            for d = hammer_duration + prm.window + 1:prm.window:prm.ndays
+            for d = hammer_duration[c] + prm.window + 1:prm.window:prm.ndays
         ) -
         # Try to enforce different cities to alternate the controls
         10.0*prm.window/(prm.rep^2)*sum(
@@ -630,7 +631,7 @@ function window_control_multcities(prm, population, target, force_difference,
             (rt[c, d] - rt[cl, d])^2
             for c = 1:prm.ncities 
             for cl = c + 1:prm.ncities 
-            for d = hammer_duration + 1:prm.window:prm.ndays
+            for d = hammer_duration[c] + 1:prm.window:prm.ndays
         )
     )
 
@@ -647,7 +648,7 @@ TODO: fix this, hammer_duration does not even exist.
 
 """
 function simulate_control(prm, population, control, target)
-    @assert mod(hammer_duration, prm.window) == 0
+    @assert sum(mod.(hammer_duration[c], prm.window)) == 0
 
     m = seir_model(prm)
 
@@ -671,7 +672,7 @@ function simulate_control(prm, population, control, target)
     @objective(m, Min,
         # Try to keep as many people working as possible
         sum(prm.window*effect_pop[c]/mean_population*(prm.rep - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration+1:prm.window:prm.ndays) -
+            for c = 1:prm.ncities for d = +1:prm.window:prm.ndays) -
         # Try to enforce different cities to alternate the controls
         100.0/(prm.rep^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
@@ -679,7 +680,7 @@ function simulate_control(prm, population, control, target)
             (rt[c, d] - rt[cl, d]^2)
             for c = 1:prm.ncities 
             for cl = c + 1:prm.ncities 
-            for d = hammer_duration + 1:prm.window:prm.ndays
+            for d = hammer_duration[c] + 1:prm.window:prm.ndays
             )
     )
 
@@ -694,7 +695,7 @@ Funtion to test ideas.
 """
 
 function playground(prm, population, target, final_target, hammer_durarion)
-    @assert mod(hammer_duration, prm.window) == 0
+    @assert mod(hammer_duration[c], prm.window) == 0
 
     m = seir_model(prm)
 
@@ -703,7 +704,7 @@ function playground(prm, population, target, final_target, hammer_durarion)
     @constraint(m, sum(population[c]*i[c,prm.ndays] for c = 1:prm.ncities) <= final_target)
 
     # Bound the maximal infection rate
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration + 1:prm.ndays],
+    @constraint(m, [c=1:prm.ncities, t=hammer_duration[c] + 1:prm.ndays],
         i[c, t] <= target[c, t]
     )
 

@@ -39,6 +39,9 @@ def get_options():
     parser.add_option("--target", dest="target",
                       default=path.join("data", "target.csv"),
                       help="Maximal infected allowed [default: %default]")
+    parser.add_option("--hammer_data", dest="hammer_data",
+                      default=path.join("data", "hammer_data.csv"),
+                      help="Hammer duration and level [default: %default]")
     options, dummy_args = parser.parse_args()
     return options
 
@@ -78,10 +81,18 @@ def read_data(options):
             index=cities_data.index, columns=cities_data.index)
         mob_matrix["out"] = np.zeros(ncities)
 
-    return basic_prm, cities_data, mob_matrix, target
+    if path.exists(options.hammer_data):
+        print('Reading hammer data...')
+        hammer_data = pd.read_csv(options.hammer_data, index_col=0)
+        print('Reading hammer data... Ok!')
+    else:
+        print('Hammer data not found. Using default values')
+        hammer_data = prepare_data.save_hammer_data(cities_data)
+
+    return basic_prm, cities_data, mob_matrix, target, hammer_data
 
 
-def prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif=1):
+def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif=1):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
@@ -98,10 +109,10 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif=1
     Julia.M = mob_matrix.values[:, :-1]
     Julia.ndays = ndays
     Julia.target = target.values
-    Julia.hammer_duration = int(basic_prm["hammer_duration"])
-    Julia.hammer_level = basic_prm["hammer_level"]
     Julia.min_level = basic_prm["min_level"]
     Julia.force_dif = force_dif
+    Julia.hammer_duration = hammer_data["duration"].values
+    Julia.hammer_level = hammer_data["level"].values
     if basic_prm["window"] == 1:
         Julia.eval("""
             prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, 1, out, sparse(M), 
@@ -167,10 +178,10 @@ def main():
     """Allow call from the command line.
     """
     options = get_options()
-    basic_prm, cities_data, mob_matrix, target = read_data(options)
+    basic_prm, cities_data, mob_matrix, target, hammer_data = read_data(options)
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     force_dif = np.ones((ncities, ndays))
-    prepare_optimization(basic_prm, cities_data, mob_matrix, target, force_dif)
+    prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif)
     optimize_and_show_results("results/cmd_i_res.png", "results/cmd_rt_res.png",
                               "results/cmd_res.csv", cities_data.index)
 
