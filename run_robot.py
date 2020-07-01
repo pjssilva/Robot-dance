@@ -7,6 +7,8 @@ import os.path as path
 from optparse import OptionParser
 import pandas as pd
 import numpy as np
+from scipy.integrate import solve_ivp
+from timeit import default_timer as timer
 import pylab as plt
 from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
@@ -130,6 +132,138 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
         """);        
 
 
+def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=False, save_file=False):
+    """Find hammer durations for each city such that the optimization problem will (hopefully) be feasible
+    """
+    ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
+
+    M = mob_matrix.values[:,:-1]
+    out = mob_matrix["out"].values
+
+    tspan = (0,ndays)
+    teval = np.arange(0, ndays+0.01, 1) # 1 day discretization
+    y0 = cities_data["S1"].values
+    y0 = np.append(y0, cities_data["E1"].values)
+    y0 = np.append(y0, cities_data["I1"].values)
+    y0 = np.append(y0, cities_data["R1"].values)
+
+    min_rt = basic_prm["min_level"]
+
+    # Hammer data
+    hammer_duration = hammer_data["duration"].values
+    hammer_level = hammer_data["level"].values
+
+    iter = 0
+    feas_model = False
+    t_total1 = timer()
+    while feas_model == False:
+        t_solve1 = timer()
+        sol = solve_ivp(_robot_dance_eqs, tspan, y0, t_eval=teval, args=(basic_prm["tinc"], \
+                                                                        basic_prm["tinf"], \
+                                                                        ncities, \
+                                                                        M, \
+                                                                        out, \
+                                                                        min_rt, \
+                                                                        hammer_level, \
+                                                                        hammer_duration))
+        t_solve2 = timer()
+        print(f'Time to simulate: {t_solve2-t_solve1}')
+
+        tsim = sol.t
+        isim = sol.y[2*ncities:3*ncities]
+
+        # Get the max number of infected after hammer
+        # (usually the number of infected immediately after hammer, but this might not work if hammer_duration = 0)
+        # (so let's use the safest implementation)
+        i_after_hammer = np.zeros(ncities)
+        target_hammer = np.zeros(ncities)
+        for c in range(ncities):
+            target_hammer[c] = target.iloc[c][hammer_duration[c]]
+            i_after_hammer[c] = max(isim[c][hammer_duration[c]:])
+
+        feas_model = True
+        for c in range(ncities):
+            if i_after_hammer[c] > target_hammer[c]:
+                print(f'{cities_data.index[c]} violates number of infected after {hammer_duration[c]} days of hammer (level {hammer_level[c]}): Infected {i_after_hammer[c]:.2g} (target {target_hammer[c]})')
+                feas_model = False
+            else:
+                print(f'{cities_data.index[c]} is fine after {hammer_duration[c]} days of hammer (infected = {i_after_hammer[c]:.2g}, target = {target_hammer[c]})')
+
+        if feas_model == False:
+            # There is at least one city violating the target after hammer
+            if incr_all == False: # Increase hammer_duration only for the city that violates the target the most
+                c_i_max = np.argmax(i_after_hammer-target_hammer)
+                print(f'City most distant from target after hammer: {cities_data.index[c_i_max]}')
+                if hammer_duration[c_i_max] == ndays:
+                    raise ValueError(f'Impossible to get a feasible model (hammer_duration for {cities_data.index[c]} is equal to the simulation horizon). Try increasing ndays or decreasing hammer_level')
+                hammer_duration[c_i_max] += basic_prm["window"]
+                print(f'Increasing hammer duration of {cities_data.index[c_i_max]} to {hammer_duration[c_i_max]} days')
+            else: # Increase hammer_duration of all cities that violate the target
+                for c in range(ncities):
+                    if i_after_hammer[c] > target_hammer[c]:
+                        if hammer_duration[c] == ndays:
+                            raise ValueError(f'Impossible to get a feasible model (hammer_duration for {cities_data.index[c]} is equal to the simulation horizon). Try increasing ndays or decreasing hammer_level')
+                        hammer_duration[c] += basic_prm["window"]
+                        print(f'Increasing hammer duration of {cities_data.index[c]} to {hammer_duration[c]} days')
+            print('')
+        iter += 1
+
+    t_total2 = timer()
+    print('')
+    print(f'Number of iterations: {iter}')
+    print(f'Total time: {t_total2-t_total1} s')
+    print('Hammer duration')
+    for c in range(ncities):
+        print(f'{cities_data.index[c]}: {hammer_duration[c]} days')
+
+    if save_file == True:
+        hammer_data.to_csv(options.hammer_data)
+
+
+def _robot_dance_eqs(t,y,tinc,tinf,ncities,M,out,min_rt,hammer_level,hammer_duration):
+    """SEIR equations for the robot-dance model
+    """
+    s = y[:ncities]
+    e = y[ncities:2*ncities]
+    i = y[2*ncities:3*ncities]
+    r = y[3*ncities:]
+    alpha = 2/3
+
+    rt = np.zeros(ncities)
+    for c in range(ncities):
+        if t <= hammer_duration[c]:
+            # Enforce hammer in the initial period
+            rt[c] = hammer_level[c]
+        else:
+            # Enforce min rt (not as strict as hammer) for the rest of horizon
+            rt[c] = min_rt
+
+    enter = np.zeros(ncities)
+    for c1 in range(ncities):
+        for c2 in range(ncities):
+            enter[c1] += M[c2,c1]*(1-i[c2])
+
+    p_day = np.zeros(ncities)
+    for c in range(ncities):
+        p_day[c] = (1-out[c]) + out[c]*i[c] + enter[c]
+
+    t1 = np.zeros(ncities)
+    for c1 in range(ncities):
+        for c2 in range(ncities):
+            t1[c1] += rt[c2]*M[c1,c2]*s[c1]*i[c2]/p_day[c2]
+
+    ds_day = -1/tinf * alpha * (rt * (1-out) * s * i / p_day + t1)
+    ds_night = -1/tinf * (1-alpha) * (rt * s * i)
+    ds = ds_day + ds_night
+
+    de = -ds - 1/tinc*e
+    di = 1/tinc*e - 1/tinf*i
+    dr = 1/tinf*i
+
+    dy = np.array([ds,de,di,dr]).flatten()
+    return dy
+
+
 def save_result(cities_names, filename):
     """Save the result of a run for further processing.
     """
@@ -178,9 +312,12 @@ def main():
     """Allow call from the command line.
     """
     options = get_options()
+
+    breakpoint()
     basic_prm, cities_data, mob_matrix, target, hammer_data = read_data(options)
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     force_dif = np.ones((ncities, ndays))
+    find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=True, save_file=False)
     prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif)
     optimize_and_show_results("results/cmd_i_res.png", "results/cmd_rt_res.png",
                               "results/cmd_res.csv", cities_data.index)
