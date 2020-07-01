@@ -312,8 +312,6 @@ def main():
     """Allow call from the command line.
     """
     options = get_options()
-
-    breakpoint()
     basic_prm, cities_data, mob_matrix, target, hammer_data = read_data(options)
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     force_dif = np.ones((ncities, ndays))
