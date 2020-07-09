@@ -2,6 +2,7 @@
 Simple driving script to run the Robot Dance model.
 '''
 
+print('Loading modules...')
 import os
 import os.path as path
 from optparse import OptionParser
@@ -12,14 +13,20 @@ from timeit import default_timer as timer
 import pylab as plt
 from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
+print('Loading modules... Ok!')
+
 
 import prepare_data
 
 # To use PyJulia
+print('Loading Julia library...')
 from julia.api import Julia
 jl = Julia(compiled_modules=False)
 from julia import Main as Julia
+print('Loading Julia library... Ok!')
+print('Loading Robot-dance Julia module...')
 Julia.eval('include("robot_dance.jl")')
+print('Loading Robot-dance Julia module... Ok!')
 
 
 def get_options():
@@ -279,7 +286,7 @@ def save_result(cities_names, filename):
         df.append([c, "rt"] + list(Julia.rt[i, :])) 
     df = pd.DataFrame(df, columns=["City", "Variable"] + list(range(len(Julia.s[0,:]))))
     df.set_index(["City", "Variable"], inplace=True)
-    return df.to_csv(filename)
+    df.to_csv(filename)
 
 
 def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities):
@@ -292,10 +299,29 @@ def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities):
         rt = expand(pre_rt, prm)
     """)
 
+    print('')
+    print('Number of rt changes in each city')
+    for (i, c) in enumerate(large_cities):
+        changes_rt = len(np.diff(Julia.rt[i]).nonzero()[0]) + 1
+        print(f'{c}: {changes_rt}')
+
+    print('')
+    print('Average fraction of infected')
+    for (i, c) in enumerate(large_cities):
+        i_avg = sum(Julia.i[i])/len(Julia.i[i])
+        print(f'{c}: {i_avg}')
+        
+
+    # Before saving anything, check if directory exists
+    # Lets assume all output files are in the same directory
+    dir_output = path.split(i_fig)[0]
+    if not path.exists(dir_output):
+        os.makedirs(dir_output)
+
     for i in range(len(large_cities)):
         plt.plot(Julia.rt[i, :], label=large_cities[i], lw=5, alpha=0.5)
     plt.legend()
-    plt.title("Target reproduction rate") 
+    plt.title("Target reproduction rate")
     plt.savefig(rt_fig)
 
     plt.clf()
