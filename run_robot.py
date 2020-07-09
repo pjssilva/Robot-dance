@@ -93,6 +93,9 @@ def read_data(options):
     if path.exists(options.hammer_data):
         print('Reading hammer data...')
         hammer_data = pd.read_csv(options.hammer_data, index_col=0)
+        ncities = len(cities_data)
+        assert len(hammer_data.index) == ncities, \
+            "Different cities in cities data and hammer data"
         print('Reading hammer data... Ok!')
     else:
         print('Hammer data not found. Using default values')
