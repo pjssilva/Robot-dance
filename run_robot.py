@@ -176,7 +176,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
     t_total1 = timer()
     while feas_model == False:
         t_solve1 = timer()
-        sol = solve_ivp(_robot_dance_eqs, tspan, y0, t_eval=teval, args=(basic_prm["tinc"], \
+        sol = solve_ivp(_robot_dance_hammer, tspan, y0, t_eval=teval, args=(basic_prm["tinc"], \
                                                                         basic_prm["tinf"], \
                                                                         ncities, \
                                                                         M, \
@@ -236,25 +236,12 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
 
     if save_file == True:
         hammer_data.to_csv(options.hammer_data)
+        
 
-
-def _robot_dance_eqs(t,y,tinc,tinf,ncities,M,out,min_rt,hammer_level,hammer_duration):
+def _robot_dance_only_eqs(s,e,i,r,rt,tinc,tinf,ncities,M,out):
     """SEIR equations for the robot-dance model
     """
-    s = y[:ncities]
-    e = y[ncities:2*ncities]
-    i = y[2*ncities:3*ncities]
-    r = y[3*ncities:]
     alpha = 2/3
-
-    rt = np.zeros(ncities)
-    for c in range(ncities):
-        if t <= hammer_duration[c]:
-            # Enforce hammer in the initial period
-            rt[c] = hammer_level[c]
-        else:
-            # Enforce min rt (not as strict as hammer) for the rest of horizon
-            rt[c] = min_rt
 
     enter = np.zeros(ncities)
     for c1 in range(ncities):
@@ -279,6 +266,45 @@ def _robot_dance_eqs(t,y,tinc,tinf,ncities,M,out,min_rt,hammer_level,hammer_dura
     dr = 1/tinf*i
 
     dy = np.array([ds,de,di,dr]).flatten()
+    return dy
+
+
+def _robot_dance_simul(t,y,tinc,tinf,ncities,M,out, t_in, rt_in):
+    """SEIR equations for the robot-dance model with control rt given by the optimization model
+    """
+    s = y[:ncities]
+    e = y[ncities:2*ncities]
+    i = y[2*ncities:3*ncities]
+    r = y[3*ncities:]
+
+    # Interpolate rt for each city for the current t
+    rt = np.zeros(ncities)
+    for c in range(ncities):
+        rt[c] = np.interp(t, t_in, rt_in[c])
+
+    dy = _robot_dance_only_eqs(s,e,i,r,rt,tinc,tinf,ncities,M,out)
+    return dy
+
+
+def _robot_dance_hammer(t,y,tinc,tinf,ncities,M,out,min_rt,hammer_level,hammer_duration):
+    """SEIR equations for the robot-dance model with initial hammer and min_rt later
+    # (used to get a hammer duration such that the optimization problem will be feasible)
+    """
+    s = y[:ncities]
+    e = y[ncities:2*ncities]
+    i = y[2*ncities:3*ncities]
+    r = y[3*ncities:]
+
+    rt = np.zeros(ncities)
+    for c in range(ncities):
+        if t <= hammer_duration[c]:
+            # Enforce hammer in the initial period
+            rt[c] = hammer_level[c]
+        else:
+            # Enforce min rt (not as strict as hammer) for the rest of horizon
+            rt[c] = min_rt
+
+    dy = _robot_dance_only_eqs(s,e,i,r,rt,tinc,tinf,ncities,M,out)
     return dy
 
 
