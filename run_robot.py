@@ -311,17 +311,56 @@ def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities):
     """)
 
     print('')
+    print('-----')
     print('Number of rt changes in each city')
     for (i, c) in enumerate(large_cities):
         changes_rt = len(np.diff(Julia.rt[i]).nonzero()[0]) + 1
         print(f'{c}: {changes_rt}')
+    print('-----')
 
     print('')
+    print('-----')
     print('Average fraction of infected')
     for (i, c) in enumerate(large_cities):
         i_avg = sum(Julia.i[i])/len(Julia.i[i])
         print(f'{c}: {i_avg}')
+    print('-----')
         
+    print('')
+    print('-----')
+    print('Number of days open (rt = 2.5)')
+    for (i,c) in enumerate(large_cities):
+        rt = Julia.rt[i]
+        inds = np.nonzero(rt >= 2.4)[0]
+        count_open_total = len(inds)
+        thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
+        thresh_open = np.insert(thresh_open, 0, 0)
+        thresh_open = np.append(thresh_open, len(inds))
+        count_open = np.diff(thresh_open)
+        print(f'{c}: {count_open_total} days total')
+        for (i,n) in enumerate(count_open):
+            print(f'Opening {i+1}: {n} days')
+        print(f'Average: {np.mean(count_open):.0f} days')
+        print('')
+    print('-----')
+
+    print('')
+    print('-----')
+    print('Number of days in lockdown (rt <= 1.1)')
+    for (i,c) in enumerate(large_cities):
+        rt = Julia.rt[i]
+        inds = np.nonzero(rt <= 1.1)[0]
+        count_open_total = len(inds)
+        thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
+        thresh_open = np.insert(thresh_open, 0, 0)
+        thresh_open = np.append(thresh_open, len(inds))
+        count_open = np.diff(thresh_open)
+        print(f'{c}: {count_open_total} days total')
+        for (i,n) in enumerate(count_open):
+            print(f'Lockdown {i+1}: {n} days')
+        print(f'Average: {np.mean(count_open):.0f} days')
+        print('')
+    print('-----')
 
     # Before saving anything, check if directory exists
     # Lets assume all output files are in the same directory
