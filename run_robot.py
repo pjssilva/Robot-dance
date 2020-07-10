@@ -236,6 +236,107 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
 
     if save_file == True:
         hammer_data.to_csv(options.hammer_data)
+
+
+def check_error_optim(basic_prm, cities_data, mob_matrix, dir_output):
+    """ Checks error between optimization and simulation
+    """
+    ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
+
+    M = mob_matrix.values[:,:-1]
+    out = mob_matrix["out"].values
+
+    tspan = (1,ndays)
+    teval = range(1,ndays+1)
+    y0 = cities_data["S1"].values
+    y0 = np.append(y0, cities_data["E1"].values)
+    y0 = np.append(y0, cities_data["I1"].values)
+    y0 = np.append(y0, cities_data["R1"].values)
+
+    Julia.eval("s = value.(m[:s]); e = value.(m[:e]); i = value.(m[:i]); r = value.(m[:r])")
+    Julia.eval("rt = expand(value.(m[:rt]), prm)")
+    t_in = teval
+    rt_in = Julia.rt
+    print('Simulating robot-dance control...')
+    sol = solve_ivp(_robot_dance_simul, tspan, y0, t_eval=teval, args=(basic_prm["tinc"], \
+                                                                        basic_prm["tinf"], \
+                                                                        ncities, \
+                                                                        M, \
+                                                                        out, \
+                                                                        t_in, \
+                                                                        rt_in))
+    print('Simulating robot-dance control... Ok!')
+    s_sim = sol.y[:ncities]
+    e_sim = sol.y[ncities:2*ncities]
+    i_sim = sol.y[2*ncities:3*ncities]
+    r_sim = sol.y[3*ncities:]
+    
+    print('Plotting errors...')
+    for (i,c) in enumerate(cities_data.index):
+        fig = plt.figure()
+        plt.plot(Julia.s[i], label="robot-dance")
+        plt.plot(s_sim[i], label="simulation")
+        plt.legend()
+        plt.title(f'{c}, Susceptible')
+        plt.savefig(f'{dir_output}/{c}_s.png')
+
+        fig = plt.figure()
+        plt.plot(Julia.e[i], label="robot-dance")
+        plt.plot(e_sim[i], label="simulation")
+        plt.legend()
+        plt.title(f'{c}, Exposed')
+        plt.savefig(f'{dir_output}/{c}_e.png')
+
+        fig = plt.figure()
+        plt.plot(Julia.i[i], label="robot-dance")
+        plt.plot(i_sim[i], label="simulation")
+        plt.legend()
+        plt.title(f'{c}, Infected')
+        plt.savefig(f'{dir_output}/{c}_i.png')
+
+        fig = plt.figure()
+        plt.plot(Julia.r[i], label="robot-dance")
+        plt.plot(r_sim[i], label="simulation")
+        plt.legend()
+        plt.title(f'{c}, Removed')
+        plt.savefig(f'{dir_output}/{c}_r.png')
+    print('Plotting errors... Ok!')
+
+    fig = plt.figure()
+    for (i,c) in enumerate(cities_data.index):
+        plt.plot(rt_in[i], label=c)
+    plt.legend()
+    plt.grid()
+    plt.title('Control rt')
+    plt.savefig(f'{dir_output}/rt.png')
+
+    rt_diff = []
+    for (i,c) in enumerate(cities_data.index):
+        rt_diff.append(np.diff(rt_in[i]))
+    
+    fig = plt.figure()
+    for (i,c) in enumerate(cities_data.index):
+        plt.plot(rt_diff[i], label=c)
+    plt.legend()
+    plt.grid()
+    plt.title('Diff rt')
+    plt.savefig(f'{dir_output}/diff_rt.png')
+
+    plt.show()
+
+    print('Saving errors table...')
+    df = pd.DataFrame(columns=['s_norm_1', 'e_norm_1', 'i_norm_1', 'r_norm_1', 's_norm_inf', 'e_norm_inf', 'i_norm_inf', 'r_norm_inf'], index=cities_data.index)
+    for (i,c) in enumerate(cities_data.index):
+        df.loc[c, 's_norm_1'] = np.linalg.norm(s_sim[i]-Julia.s[i], ord=1)
+        df.loc[c, 'e_norm_1'] = np.linalg.norm(e_sim[i]-Julia.e[i], ord=1)
+        df.loc[c, 'i_norm_1'] = np.linalg.norm(i_sim[i]-Julia.i[i], ord=1)
+        df.loc[c, 'r_norm_1'] = np.linalg.norm(r_sim[i]-Julia.r[i], ord=1)
+        df.loc[c, 's_norm_inf'] = np.linalg.norm(s_sim[i]-Julia.s[i], ord=np.inf)
+        df.loc[c, 'e_norm_inf'] = np.linalg.norm(e_sim[i]-Julia.e[i], ord=np.inf)
+        df.loc[c, 'i_norm_inf'] = np.linalg.norm(i_sim[i]-Julia.i[i], ord=np.inf)
+        df.loc[c, 'r_norm_inf'] = np.linalg.norm(r_sim[i]-Julia.r[i], ord=np.inf)
+    df.to_csv(f'{dir_output}/error_discretization.csv')
+    print('Saving errors table... Ok!')
         
 
 def _robot_dance_only_eqs(s,e,i,r,rt,tinc,tinf,ncities,M,out):
