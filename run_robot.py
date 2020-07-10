@@ -139,7 +139,15 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
                                   sparse(M), sparse(M'))
             m = window_control_multcities(prm, population, target, force_dif, 
                                           hammer_duration, hammer_level, min_level);
-        """);        
+        """)
+
+    # Check if there is a ramp parameter (delta_rt_max)
+    # If so, add ramp constraints to the model
+    if 'delta_rt_max' in basic_prm:
+        Julia.delta_rt_max = basic_prm["delta_rt_max"]
+        Julia.eval("""
+            m = add_ramp(m, prm, hammer_duration, delta_rt_max)
+        """)
 
 
 def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=False, save_file=False):

@@ -729,6 +729,31 @@ end
 
 
 """
+    add_ramp
+
+Adds ramp constraints to the robot-dance model.
+
+# Input arguments
+m: the optimization model
+prm: struct with parameters
+hammer_duration: initial hammer for each city
+delta_rt_max: max increase in the control rt between (t-1) and (t)
+
+# Output: the optimization model m
+"""
+function add_ramp(m, prm, hammer_duration, delta_rt_max)
+    println("Adding ramp constraints (delta_rt_max = $delta_rt_max)...")
+    rt = m[:rt]
+    @constraint(m, [c=1:prm.ncities, d = hammer_duration[c] + 1:prm.window:prm.ndays],
+    rt[c, d] - rt[c, d - prm.window] <= delta_rt_max
+    )
+    println("Adding ramp constraints (delta_rt_max = $delta_rt_max)... Ok!")
+
+    return m
+end
+
+
+"""
     simulate_control
 
 Simulate the SEIR mdel with a given control checking whether the target is achieved.
