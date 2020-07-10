@@ -514,14 +514,16 @@ def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities):
 def main():
     """Allow call from the command line.
     """
+    dir_output = "results_central_no_ramp"
     options = get_options()
     basic_prm, cities_data, mob_matrix, target, hammer_data = read_data(options)
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     force_dif = np.ones((ncities, ndays))
     find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=True, save_file=False)
     prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif)
-    optimize_and_show_results("results/cmd_i_res.png", "results/cmd_rt_res.png",
-                              "results/cmd_res.csv", cities_data.index)
+    optimize_and_show_results(f"{dir_output}/cmd_i_res.png", f"{dir_output}/cmd_rt_res.png",
+                              f"{dir_output}/cmd_res.csv", cities_data.index)
+    # check_error_optim(basic_prm, cities_data, mob_matrix, dir_output)
 
 if __name__ == "__main__":
     main()

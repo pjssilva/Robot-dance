@@ -468,7 +468,7 @@ function quadratic_seir_model_with_free_initial_values(prm)
         @expression(m, drp[c=1:prm.ncities, t=2:prm.ndays],
             (1.0/prm.tinf)*ip[c, t]
         )
-        println("Adding constraints for the intermediate point...")
+        println("Adding constraints for the intermediate point... Ok!")
 
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
             s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt
