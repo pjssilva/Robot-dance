@@ -17,8 +17,7 @@ Julia.eval('ENV["OMP_NUM_THREADS"] = 8')
 Julia.eval('include("robot_dance.jl")')
 
 
-def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, window=14, min_level=1.0, 
-    hammer_level=0.89, hammer_duration=0):
+def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, window=14, min_level=1.0):
     """Save the basic_paramters.csv file using the data used in the report.
 
        All values are optional. If not present the values used in the report wihtout
@@ -31,8 +30,6 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, window=14, min
     basic_prm["ndays"] = ndays
     basic_prm["window"] = window
     basic_prm["min_level"] = min_level
-    basic_prm["hammer_level"] = hammer_level
-    basic_prm["hammer_duration"] = hammer_duration
     basic_prm.to_csv(path.join("data", "basic_parameters.csv"), header=False)
     return basic_prm
 
@@ -215,3 +212,12 @@ def save_target(cities_data, target):
     target_df = pd.DataFrame(data=target, index=cities_data.index, columns=days)
     target_df.to_csv(path.join("data", "target.csv"))
     return target_df
+
+def save_hammer_data(cities_data, duration=0, level=0.89):
+    """ Save hammer data
+    """
+    hammer_df = pd.DataFrame(index=cities_data.index)
+    hammer_df["duration"] = duration
+    hammer_df["level"] = level
+    hammer_df.to_csv(path.join("data", "hammer_data.csv"))
+    return hammer_df
