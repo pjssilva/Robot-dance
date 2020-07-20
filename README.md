@@ -48,8 +48,7 @@ It expects 4 input files in the subfolder `data`:
     * `ndays`: number of days to be considered in the simulation.
     * `window`: number of days to keep the mitigation level constant.
     * `min_level`: what is the r0 attainable using the most demanding mitigation.
-    * `hammer_level`: r0 during the initial hammer phase.
-    * `hammer_duration`: hammer phase duration in days.
+    * `delta_rt_max`: (optional) if this parameter is provided, ramp constraints will be added to the model, preventing rt to increase more than `delta_rt_max` between two consecutive periods (`delta_rt_max > 0`).
 
 * `cities_data.csv`: basic cities data in CSV format. It must contain one line per city,
   with the city name as index and the following named columns:
@@ -84,6 +83,14 @@ It expects 4 input files in the subfolder `data`:
 * `target.csv`: a matrix with the maximal amount of infected that is acceptable for each
   cities (as rows) at each day (as columns). The city names should be used as index and
   consecutive numbers from 1 to `ndays`as column labels. 
+
+* `hammer_data.csv`: (optional) hammer to be applied in the first days/weeks, if necessary. If this file is provided, the algorithm will check if the hammer phase is long enough for each city; finding that it is not, it will increase the duration by one window and check again, until no city violate the target of number of infected after the hammer phase.
+  It must contain one line per city, with the city name as index and the following named columns:
+    * `duration`: minimum duration of hammer for the city, in days.
+    * `level`: level (`r0`) to be applied during the hammer phase.
+
+
+If this file is not provided, default data will be used: `duration = 0`, `level=0.89` and the iterative check above will be performed.
 
 After you have all the files in place with the right names, you can run the code with
 `python run_robot.py` the result will be made available in a file named
