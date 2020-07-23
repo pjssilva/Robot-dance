@@ -206,8 +206,8 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
-            target_hammer[c] = target.iloc[c][hammer_duration[c]]
-            i_after_hammer[c] = max(isim[c][hammer_duration[c]:])
+            target_hammer[c] = 0.75*target.iloc[c][hammer_duration[c] + 1]
+            i_after_hammer[c] = max(isim[c][hammer_duration[c] + 1:])
 
         feas_model = True
         for c in range(ncities):
@@ -254,6 +254,8 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
     if save_file == True:
         if verbosity >= 1:
             print('Saving hammer data file')
+        # TODO: Since this funciton is to be called from a program and not only from the 
+        # command line it does not make sense to have option.???? here. 
         hammer_data.to_csv(options.hammer_data)
 
     if verbosity >= 1:
@@ -561,7 +563,7 @@ def main():
     """Allow call from the command line.
     """
     verbosity = 1   # 0: print nothing, 1: print min info, 2: more detailed, including solver progress
-    dir_output = "results_central_no_ramp"
+    dir_output = "results"
     options = get_options()
     basic_prm, cities_data, mob_matrix, target, hammer_data = read_data(options)
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])

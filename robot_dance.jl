@@ -126,8 +126,8 @@ end
         ma97 (preferred) or mumps.
 """
 function best_linear_solver()
-    # PREFERRED = "ma97"
-    PREFERRED = "mumps"
+    PREFERRED = "ma97"
+    #PREFERRED = "pardiso"
     m = Model(optimizer_with_attributes(Ipopt.Optimizer,
               "print_level" => 0, "linear_solver" => PREFERRED))
     @variable(m, x)
@@ -163,7 +163,7 @@ function nonlinear_seir_model_with_free_initial_values(prm, verbosity=0)
 
     verbosity_ipopt = 0
     if verbosity >= 2
-        verbosity_ipopt = 5 # Print summary and progress
+        verbosity_ipopt = 6 # Print summary and progress
     end
 
     m = Model(optimizer_with_attributes(Ipopt.Optimizer,
@@ -451,7 +451,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     end
 
     discr_method = "finite_difference"
-    # discr_method = "heun"
+    #discr_method = "heun"
     k_curr_t = 0.5
     k_prev_t = 0.5
 
@@ -562,8 +562,6 @@ seir_model_with_free_initial_values = quadratic_seir_model_with_free_initial_val
 # seir_model_with_free_initial_values = nonlinear_seir_model_with_free_initial_values
 
 
-
-
 """
     seir_model(prm)
 
@@ -605,13 +603,19 @@ end
 
 
 """
-    fit_initcond_model(prm, initial_data)
+    fit_initcond_model(tinc, tinf, rep, initial_data, ttv_weight=0.25)
 
-Fit the initial parameters for a single city using squared absolute error from initial_data.
+Fit the initial parameters for a single city using squared relative error and
+allowing rt to change to capture social distancing measures implemented in the
+mean time.
+
+# Attributes
+
+- ttv_weight: controls the wight given to the total variation of the R0 parameter.
 """
 function fit_initial(tinc, tinf, rep, data)
-
-    prm = SEIR_Parameters(tinc, tinf, rep, length(data), [0.0], [0.0], [0.0], [0.0], 
+    # Create SEIR model
+    prm = SEIR_Parameters(tinc, tinf, rep, length(data), [1.0], [0.0], [0.0], [0.0], 
         1, [0.0], zeros(1, 1), zeros(1, 1))
 
     m = seir_model_with_free_initial_values(prm)
@@ -622,18 +626,30 @@ function fit_initial(tinc, tinf, rep, data)
     set_start_value(s1, prm.s1[1])
     set_start_value(e1, prm.e1[1])
     set_start_value(i[1, 1], prm.i1[1])
+
+    # Define upper bounds on rt
     for t = 1:prm.window:prm.ndays
-        fix(rt[1, t], prm.rep; force=true)
+        set_upper_bound(rt[1, t], prm.rep)
     end
 
-    @constraint(m, s1 + e1 + i[1, 1] + r1 == 1.0)
-    # Compute a scaling factor so as a least square objective makes more sense
-    factor = 1.0/mean(data)
-    @objective(m, Min, sum((factor*(i[t] - data[t]))^2 for t = 1:prm.ndays))
+    # USed to compute the total rt variation
+    @variable(m, ttv[2:prm.ndays])
+    @constraint(m, con_ttv[i=2:prm.ndays], ttv[i] >= rt[1, i - 1] - rt[1, i])
+    @constraint(m, con_ttv2[i=2:prm.ndays], ttv[i] >= rt[1, i] - rt[1, i - 1])
 
+    # SEIR contraint
+    @constraint(m, s1 + e1 + i[1, 1] + r1 == 1.0)
+
+    # Define objective function
+    # Compute a scaling factor so as a least square objective makes more sense
+    valid = (t for t = 1:prm.ndays if data[t] > 0)
+    @NLobjective(m, Min, sum((i[1, t]/data[t] - 1.0)^2 for t in valid) + ttv_weight*sum(ttv[t] for t = 2:prm.ndays))
+
+    # Optimize
     optimize!(m)
 
-    return value(s1), value(e1), value(i[1, 1]), value(r1)
+    return value(m[:s][1, prm.ndays]), value(m[:e][1, prm.ndays]), 
+        value(m[:i][1, prm.ndays]), value(m[:r][1, prm.ndays]), value.(rt[1, :])
 end
 
 
@@ -804,17 +820,17 @@ function window_control_multcities(prm, population, target, force_difference,
         # Try to keep as many people working as possible
         prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
+        # Estimula o bang-bang
         0.1*prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])*(min_rt - rt[c, d])
-        for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
-    
-        # Try to alternate with a single city.
-        prm.window/(prm.rep^2)*sum(
+            for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
+        # Try to alternate within a single city.
+        0.1*prm.window/(prm.rep^2)*sum(
             force_difference[c, d]*(rt[c, d] - rt[c, d - prm.window])^2 
             for c = 1:prm.ncities 
             for d = hammer_duration[c] + prm.window + 1:prm.window:prm.ndays
         ) -
         # Try to enforce different cities to alternate the controls
-        10.0*prm.window/(prm.rep^2)*sum(
+        1.0*prm.window/(prm.rep^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
             (rt[c, d] - rt[cl, d])^2

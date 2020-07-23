@@ -39,7 +39,7 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, window=14, min
 
 
 def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
-    """Fits data and define initial contidions of the SEIR model.
+    """Fits data and define initial contidions of the SEIR model in the last day.
     """
     population = city_data["estimated_population_2019"].iloc[0]
     confirmed = city_data["confirmed"]
@@ -61,28 +61,16 @@ def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
         Julia.tinc = basic_prm["tinc"]
         Julia.tinf = basic_prm["tinf"]
         Julia.rep = basic_prm["rep"]
-        Julia.eval('initialc = fit_initial(tinc, tinf, rep, observed_I)')
-        S1 = Julia.initialc[0]
-        E1 = Julia.initialc[1]
-        I1 = Julia.initialc[2]
-        R1 = Julia.initialc[3]
-        return (S1, E1, I1, R1, ndays), observed_I, population
+        Julia.eval('S1, E1, I1, R1, rt = fit_initial(tinc, tinf, rep, observed_I)')
+        S1 = Julia.S1
+        E1 = Julia.E1
+        I1 = Julia.I1
+        R1 = Julia.R1
+        rt = Julia.rt
+        return (S1, E1, I1, R1, ndays), rt, observed_I, population
     else:
         raise ValueError("Not enough data for %s only %d days available" % 
             (city_data["city"].iloc[0], len(observed_I)))
-
-
-def simulate(parameters, city_data, min_days):
-    """Simulate from the computed initial parameters until the last day.
-    """
-    c = city_data["city"].iloc[0]
-    last_day = city_data["date"].iloc[-1]
-
-    S1, E1, I1, R1, ndays = parameters[c]
-    covid = seir.seir(ndays)
-    print("Simulating", c, "until", last_day)
-    result = covid.run((S1, E1, I1, R1))
-    return result[:, -1], last_day
 
 
 def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, min_pop, correction,
@@ -134,7 +122,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
         print("%d/%d" %(i + 1, n_cities), city_name)
         try:
             city_data = epi_data[epi_data["city"] == city_name]
-            parameters[city_name], observed_I, city_pop = initial_conditions(basic_prm, 
+            parameters[city_name], rt, observed_I, city_pop = initial_conditions(basic_prm, 
                 city_data, min_days, Julia, correction)
             population.append(city_pop)
         except ValueError:
@@ -147,7 +135,8 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
         if city_name in ignored:
             continue
         city_data = epi_data[epi_data["city"] == city_name]
-        cities_data[city_name], last_day = simulate(parameters, city_data, min_days)
+        last_day = city_data["date"].iloc[-1]
+        cities_data[city_name] = parameters[city_name][:4]
 
     # Save results
     cities_data = pd.DataFrame.from_dict(cities_data, 
@@ -167,7 +156,8 @@ def convert_mobility_matrix_and_save(cities_data, max_neighbors, drs=False):
     # Read the mobility_matrix
     large_cities = cities_data.index
     if drs:
-        mobility_matrix = pd.read_csv("data/drs_mobility.csv", index_col=0).T
+        mobility_matrix = pd.read_csv("data/drs_mobility.csv", index_col=0)
+        mobility_matrix = mobility_matrix.loc[large_cities, large_cities].T
         mobility_matrix = mobility_matrix.mask(
             mobility_matrix.rank(axis=1, method='min', ascending=False) > max_neighbors + 1, 0
         )
@@ -216,6 +206,7 @@ def save_target(cities_data, target):
     target_df = pd.DataFrame(data=target, index=cities_data.index, columns=days)
     target_df.to_csv(path.join("data", "target.csv"))
     return target_df
+
 
 def save_hammer_data(cities_data, duration=0, level=0.89):
     """ Save hammer data
