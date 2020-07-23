@@ -3,7 +3,6 @@ Helper functions to convert the data to the format expected by run_robot.py
 """
 
 import sys
-import seir
 import pandas as pd
 import numpy as np
 import numpy.linalg as la
@@ -66,15 +65,15 @@ def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
         E1 = Julia.E1
         I1 = Julia.I1
         R1 = Julia.R1
-        rt = Julia.rt
+        rt = np.array(Julia.rt)
         return (S1, E1, I1, R1, ndays), rt, observed_I, population
     else:
         raise ValueError("Not enough data for %s only %d days available" % 
             (city_data["city"].iloc[0], len(observed_I)))
 
 
-def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, min_pop, correction,
-    raw_name="data/covid_with_cities.csv"):
+def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, min_pop, 
+    correction, verbose=0, raw_name="data/covid_with_cities.csv"):
     """Compute the initial conditions and population and save it to data/cities_data.csv.
 
     The population andinitial condition is estimated  from a file with the information on
@@ -125,11 +124,13 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
             parameters[city_name], rt, observed_I, city_pop = initial_conditions(basic_prm, 
                 city_data, min_days, Julia, correction)
             population.append(city_pop)
+            if verbose > 0:
+                print(city_name, "R0 after first month:", np.mean(rt[30:45]), "Last two weeks R0:", np.mean(rt[-15:]))
         except ValueError:
             print("Ignoring ", city_name, "not enough data.")
             ignored.append(city_name)    
 
-    # Simulate the data until the last day to start the optimization phase.
+    # Get the necessary information.
     cities_data = {}
     for city_name in large_cities:
         if city_name in ignored:
