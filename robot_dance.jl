@@ -613,7 +613,7 @@ mean time.
 
 - ttv_weight: controls the wight given to the total variation of the R0 parameter.
 """
-function fit_initial(tinc, tinf, rep, data)
+function fit_initial(tinc, tinf, rep, data, ttv_weight=0.25)
     # Create SEIR model
     prm = SEIR_Parameters(tinc, tinf, rep, length(data), [1.0], [0.0], [0.0], [0.0], 
         1, [0.0], zeros(1, 1), zeros(1, 1))
