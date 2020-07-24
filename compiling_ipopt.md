@@ -117,3 +117,6 @@ m = Model(optimizer_with_attributes(Ipopt.Optimizer,
 optimize!(m)
 ```
 
+If you get an error stating that `libhsl.so` is missing try to create a symbolic link
+from `libcoinhsl.so` to `libhsl.so` in `/usr/local/lib`.
+

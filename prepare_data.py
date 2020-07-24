@@ -118,14 +118,17 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     n_cities = len(large_cities)
     for i in range(n_cities):
         city_name = large_cities[i]
-        print("%d/%d" %(i + 1, n_cities), city_name)
+        print("%3d/%3d" %(i + 1, n_cities), "%-30s" % city_name, end=" ")
         try:
             city_data = epi_data[epi_data["city"] == city_name]
             parameters[city_name], rt, observed_I, city_pop = initial_conditions(basic_prm, 
                 city_data, min_days, Julia, correction)
             population.append(city_pop)
             if verbose > 0:
-                print(city_name, "R0 after first month:", np.mean(rt[30:45]), "Last two weeks R0:", np.mean(rt[-15:]))
+                print("R0 in the start (after two weeks) %.2f, in last two weeks %.2f" % 
+                      (np.mean(rt[15:30]), np.mean(rt[-15:])))
+            else:
+                print()
         except ValueError:
             print("Ignoring ", city_name, "not enough data.")
             ignored.append(city_name)    

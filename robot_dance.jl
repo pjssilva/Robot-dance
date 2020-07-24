@@ -821,7 +821,8 @@ function window_control_multcities(prm, population, target, force_difference,
         prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
         # Estimula o bang-bang
-        0.1*prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])*(min_rt - rt[c, d])
+        0.1*prm.window*sum(force_difference[c, d]*effect_pop[c]/mean_population*
+            (prm.rep - rt[c, d])*(min_rt - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
         # Try to alternate within a single city.
         0.1*prm.window/(prm.rep^2)*sum(
