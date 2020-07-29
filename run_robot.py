@@ -116,6 +116,8 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
 
     Julia.tinc = basic_prm["tinc"]
     Julia.tinf = basic_prm["tinf"]
+    Julia.time_icu = basic_prm["time_icu"]
+    Julia.need_icu = basic_prm["need_icu"]
     Julia.rep = basic_prm["rep"]
     Julia.s1 = cities_data["S1"].values
     Julia.e1 = cities_data["E1"].values
@@ -134,16 +136,16 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.verbosity = verbosity
     if basic_prm["window"] == 1:
         Julia.eval("""
-            prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, availICU, 1, out, sparse(M), 
-                                  sparse(M'))
+            prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, 
+                                  r1, availICU, 1, out, sparse(M), sparse(M'))
             m = control_multcities(prm, population, target, force_dif, hammer_duration, 
                                    hammer_level, min_level, verbosity)
         """)
     else:
         Julia.window = basic_prm["window"]
         Julia.eval("""
-            prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, availICU, window, out, 
-                                  sparse(M), sparse(M'))
+            prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, 
+                                  r1, availICU, window, out, sparse(M), sparse(M'))
             m = window_control_multcities(prm, population, target, force_dif, 
                                           hammer_duration, hammer_level, min_level, verbosity);
         """)
@@ -161,12 +163,6 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
 def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=False, save_file=False, verbosity=0):
     """Find hammer durations for each city such that the optimization problem will (hopefully) be feasible
     """
-    # TODO: Move this to basic_prm
-    # Bound the maximal infection rate taking into account the maximal ICU rooms available.
-    # Some configuration parameters got from https://covid-calc.org/
-    TIME_ICU = 8
-    NEED_ICU = 0.0779*0.2891  # Ratio that need hospitalization times ratio that go to ICU.
-
     if verbosity >= 1:
         print('Checking if initial hammer is long enough...')
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
@@ -214,7 +210,8 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
             target_hammer[c] = 0.75*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
-            i_after_hammer[c] = NEED_ICU*TIME_ICU*max(isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
+            i_after_hammer[c] = basic_prm["time_icu"]*basic_prm["need_icu"]*max(
+                isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 
         feas_model = True
         for c in range(ncities):

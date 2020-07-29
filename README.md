@@ -44,7 +44,9 @@ It expects 4 input files in the subfolder `data`:
   `<parameter name>, <paramter values>`. The parameters are:
     * `tinc`: Incubation time for the SEIR Model (default 5.2).
     * `tinf`: Infected time for SEIR model (default 2.9).
-    * `rep`: reproduction rate of the virus without mitigation (default 2.5)
+    * `rep`: reproduction rate of the virus without mitigation (default 2.5).
+    * `time_icu`: mean time a patient spend in ICU.
+    * `need_icu`: ratio of inffected that need ICU care.
     * `ndays`: number of days to be considered in the simulation.
     * `window`: number of days to keep the mitigation level constant.
     * `min_level`: what is the r0 attainable using the most demanding mitigation.
