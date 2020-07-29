@@ -45,6 +45,7 @@ struct SEIR_Parameters
     e1::Vector{Float64}
     i1::Vector{Float64}
     r1::Vector{Float64}
+    availICU::Vector{Float64}
     window::Int64
     out::Vector{Float64}
     M::SparseMatrixCSC{Float64,Int64}
@@ -55,11 +56,13 @@ struct SEIR_Parameters
 
     SEIR parameters with mobility information (out, M, Mt).
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window, out, M, Mt)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1,  availICU, window, out, 
+        M, Mt)
         ls1 = length(s1)
         @assert length(e1) == ls1
         @assert length(i1) == ls1
         @assert length(r1) == ls1
+        @assert length(availICU) == ls1
         @assert size(M) == (ls1, ls1)
         @assert all(M .>= 0.0)
         @assert size(Mt) == (ls1, ls1)
@@ -67,7 +70,7 @@ struct SEIR_Parameters
         @assert size(out) == (ls1,)
         @assert all(out .>= 0.0)
 
-        new(tinc, tinf, rep, ndays, ls1, s1, e1, i1, r1, window, out, M, Mt)
+        new(tinc, tinf, rep, ndays, ls1, s1, e1, i1, r1, availICU, window, out, M, Mt)
     end
 
     """
@@ -75,12 +78,12 @@ struct SEIR_Parameters
 
     SEIR parameters without mobility information, which is assumed to be 0.
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, availICU, window)
         ls1 = length(s1)
         out = zeros(ls1)
         M = spzeros(ls1, ls1)
         Mt = spzeros(ls1, ls1)
-        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window, out, M, Mt)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, availICU, window, out, M, Mt)
     end
 
     """
@@ -89,8 +92,8 @@ struct SEIR_Parameters
     SEIR parameters with unit time window and without mobility information, which is assumed 
     to be 0.
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1)
-        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, 1)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, availICU)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, availICU, 1)
     end
 end
 
@@ -615,21 +618,21 @@ mean time.
 """
 function fit_initial(tinc, tinf, rep, data, ttv_weight=0.25)
     # Create SEIR model
-    prm = SEIR_Parameters(tinc, tinf, rep, length(data), [1.0], [0.0], [0.0], [0.0], 
+    prm = SEIR_Parameters(tinc, tinf, rep, length(data), [1.0], [0.0], [0.0], [0.0], [1.0],
         1, [0.0], zeros(1, 1), zeros(1, 1))
 
     m = seir_model_with_free_initial_values(prm)
 
     # Initial state
     s1, e1, i, r1, rt = m[:s][1, 1], m[:e][1, 1], m[:i], m[:r][1, 1], m[:rt]
-    fix(r1, prm.r1[1]; force=true)
+    set_start_value(r1, prm.r1[1])
     set_start_value(s1, prm.s1[1])
     set_start_value(e1, prm.e1[1])
     set_start_value(i[1, 1], prm.i1[1])
 
     # Define upper bounds on rt
     for t = 1:prm.window:prm.ndays
-        set_upper_bound(rt[1, t], prm.rep)
+        set_upper_bound(rt[1, t], 10*prm.rep)
     end
 
     # USed to compute the total rt variation
@@ -797,10 +800,40 @@ function window_control_multcities(prm, population, target, force_difference,
     if verbosity >= 1
         println("Setting limits for number of infected...")
     end
-    i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration[c] + 1:prm.ndays], 
-        i[c, t] <= target[c, t]
+    # TODO: Move this to basic_prm
+    # Bound the maximal infection rate taking into account the maximal ICU rooms available.
+    # Some configuration parameters got from https://covid-calc.org/
+    TIME_ICU = 8
+    NEED_ICU = 0.0779*0.2891  # Ratio that need hospitalization times ratio that go to ICU.
+    # # Time to enter ICU after leaving I (getting into R)
+    # # Acoording to https://www.nejm.org/doi/full/10.1056/nejmoa2004500 the time
+    # # to ICU is 7 days after symptoms, but you have 2 days in I (citation) before
+    # # becoming symptomatic.
+    # TIME_TO_ICU = 7 + 2 - int(round(prm.tinf)) - 1
+
+    r = m[:r]
+    @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
+    # @expression(m, enter_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU:prm.ndays],
+    #     NEED_ICU*leave_i[d - TIME_TO_ICU])
+    # @expression(m, leave_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU + TIME_ICU:prm.ndays],
+    #     enter_icu[d - TIME_ICU])
+
+    # ICU capacity constraint.
+    # It says (all in expectation) that the number of patients that will enter the ICUs
+    # in the time window that is necessary for the patients to leave ICU is not
+    # larger than the number of ICUs available. 
+    @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - TIME_ICU],
+        NEED_ICU*sum(leave_i[c, dl] for dl=d:d + TIME_ICU - 1) <= target[c, d]*prm.availICU[c]
     )
+
+    # availICU = copy(prm.availICU)
+    # availICU /= TIME_ICU
+    # availICU /= NEED_ICU  
+    # i = m[:i]
+    # @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
+    #     i[c, d] <= target[c, d]*availICU[c]
+    # )
+
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
     end

@@ -76,7 +76,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     correction, verbose=0, raw_name="data/covid_with_cities.csv"):
     """Compute the initial conditions and population and save it to data/cities_data.csv.
 
-    The population andinitial condition is estimated  from a file with the information on
+    The population and initial condition is estimated  from a file with the information on
     the total number of confimed cases for the cities. See the example in
     data/covid_with_cities.csv.
 
@@ -100,7 +100,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     large_cities.sort()
 
     # Create a new Dataframe with only the needed information
-    raw_epi_data = raw_epi_data[["city", "date", "confirmed", "estimated_population_2019"]]
+    raw_epi_data = raw_epi_data[["city", "date", "confirmed", "estimated_population_2019", "icu_capacity"]]
     epi_data = raw_epi_data[raw_epi_data["city"] == large_cities[0]].copy()
     epi_data.sort_values(by=["date"], inplace=True)
     for city_name in large_cities[1:]:
@@ -115,6 +115,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     ignored = []
 
     population = []
+    icu_capacity = []
     n_cities = len(large_cities)
     for i in range(n_cities):
         city_name = large_cities[i]
@@ -124,9 +125,10 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
             parameters[city_name], rt, observed_I, city_pop = initial_conditions(basic_prm, 
                 city_data, min_days, Julia, correction)
             population.append(city_pop)
+            icu_capacity.append(city_data["icu_capacity"].iloc[0])
             if verbose > 0:
-                print("R0 in the start (after two weeks) %.2f, in last two weeks %.2f" % 
-                      (np.mean(rt[15:30]), np.mean(rt[-15:])))
+                print("R0 in the start (after two weeks) %.6f, in last two weeks %.6f" % 
+                      (np.mean(rt[15:30]), np.mean(rt[-14:])))
             else:
                 print()
         except ValueError:
@@ -146,6 +148,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     cities_data = pd.DataFrame.from_dict(cities_data, 
         orient="index", columns=["S1", "E1", "I1", "R1"])
     cities_data["population"] = population
+    cities_data["icu_capacity"] = icu_capacity
     cities_data.to_csv(path.join("data", "cities_data.csv"))
     return cities_data
 
