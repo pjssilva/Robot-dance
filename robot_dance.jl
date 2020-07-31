@@ -45,6 +45,7 @@ struct SEIR_Parameters
     ncities::Int64
     time_icu::Int64
     need_icu::Float64
+    alternate::Float64
     s1::Vector{Float64}
     e1::Vector{Float64}
     i1::Vector{Float64}
@@ -60,7 +61,7 @@ struct SEIR_Parameters
 
     SEIR parameters with mobility information (out, M, Mt).
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, 
+    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
             s1, e1, i1, r1, availICU, window, out, M, Mt)
         ls1 = length(s1)
         @assert length(e1) == ls1
@@ -74,8 +75,8 @@ struct SEIR_Parameters
         @assert size(out) == (ls1,)
         @assert all(out .>= 0.0)
 
-        new(tinc, tinf, rep, ndays, ls1, time_icu, need_icu, s1, e1, i1, r1, availICU, 
-            window, out, M, Mt)
+        new(tinc, tinf, rep, ndays, ls1, time_icu, need_icu, alternate, s1, e1, i1, r1,
+            availICU, window, out, M, Mt)
     end
 
     """
@@ -83,14 +84,14 @@ struct SEIR_Parameters
 
     SEIR parameters without mobility information, which is assumed to be 0.
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, r1, 
-            availICU, window)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
+            s1, e1, i1, r1, availICU, window)
         ls1 = length(s1)
         out = zeros(ls1)
         M = spzeros(ls1, ls1)
         Mt = spzeros(ls1, ls1)
-        SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, r1, 
-            availICU, window, out, M, Mt)
+        SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
+            s1, e1, i1, r1, availICU, window, out, M, Mt)
     end
 
     """
@@ -99,10 +100,10 @@ struct SEIR_Parameters
     SEIR parameters with unit time window and without mobility information, which is assumed 
     to be 0.
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, r1, 
-        availICU)
-        SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, r1, 
-            availICU, 1)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
+        s1, e1, i1, r1, availICU)
+        SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
+            s1, e1, i1, r1, availICU, 1)
     end
 end
 
@@ -570,7 +571,7 @@ end
 
 
 # Defines de default variation: the quadratic version
-seir_model_with_free_initial_values = quadratic_seir_model_with_free_initial_values
+const seir_model_with_free_initial_values = quadratic_seir_model_with_free_initial_values
 # seir_model_with_free_initial_values = nonlinear_seir_model_with_free_initial_values
 
 
@@ -627,7 +628,7 @@ mean time.
 """
 function fit_initial(tinc, tinf, rep, time_icu, need_icu, data, ttv_weight=0.25)
     # Create SEIR model
-    prm = SEIR_Parameters(tinc, tinf, rep, length(data), time_icu, need_icu,
+    prm = SEIR_Parameters(tinc, tinf, rep, length(data), time_icu, need_icu, 1.0,
          [1.0], [0.0], [0.0], [0.0], [1.0], 1, [0.0], zeros(1, 1), zeros(1, 1))
 
     m = seir_model_with_free_initial_values(prm)
@@ -662,104 +663,6 @@ function fit_initial(tinc, tinf, rep, time_icu, need_icu, data, ttv_weight=0.25)
 
     return value(m[:s][1, prm.ndays]), value(m[:e][1, prm.ndays]), 
         value(m[:i][1, prm.ndays]), value(m[:r][1, prm.ndays]), value.(rt[1, :])
-end
-
-
-"""
-    control_multcities
-
-Built a simple control problem that tries to force the infected to remain below target every
-day for every city using daily controls with small total variation.
-
-# Attributes
-
-- prm: SEIR parameters with initial state and other informations.
-- population: population of each city.
-- target: limit of infected to impose at each city for each day.
-- force_difference: allow to turn off the alternation for a city in certain days. Should be
-    used if alternation happens even after the eipdemy is dieing off.
-- hammer_durarion: Duration in days of a intial hammer phase.
-- hammer: Rt level that should be achieved during hammer phase.
-- min_rt: minimum rt achievable outside the hammer phases.
-"""
-function control_multcities(prm, population, target, force_difference, hammer_duration=0,
-    hammer=0.89, min_rt=1.0, verbosity=0)
-    @assert sum(mod.(hammer_duration, prm.window)) == 0
-
-    m = seir_model(prm, verbosity)
-
-    if verbosity >= 1
-        println("Setting limits for rt...")
-    end
-    # Fix rt during hammer phase
-    rt = m[:rt]
-    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration[c]
-        fix(rt[c, d], hammer[c]; force=true)
-    end
-
-    # Set the minimum rt achievable after the hammer phase.
-    for c = 1:prm.ncities, d = hammer_duration[c] + 1:prm.window:prm.ndays
-        set_lower_bound(rt[c, d], min_rt)
-    end
-
-    # Compute the total variation of the control rt
-    rt = m[:rt]
-    @variable(m, tot_var[c=1:prm.ncities, t=hammer_duration[c] + prm.window + 1:prm.window:prm.ndays])
-    @constraint(m, tot_var1[c=1:prm.ncities, t=hammer_duration[c] + prm.window + 1:prm.window:prm.ndays],
-        rt[c, t - prm.window] - rt[c, t] <= tot_var[c, t]
-    )
-    @constraint(m, tot_var2[c=1:prm.ncities, t=hammer_duration[c] + 2:prm.ndays],
-        rt[c, t] - rt[c, t - prm.window] <= tot_var[c, t]
-    )
-
-    if verbosity >= 1
-        println("Setting limits for rt... Ok!")
-    end
-
-    # Constraint on maximum level of infection
-    if verbosity >= 1
-        println("Setting limits for number of infected...")
-    end
-    i = m[:i]
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration[c] + 1:prm.ndays], 
-        i[c, t] <= target[c, t]
-    )
-    if verbosity >= 1
-        println("Setting limits for number of infected...")
-    end
-
-    # Compute the weights for the objectives terms
-    if verbosity >= 1
-        println("Computing objective function...")
-    end
-    effect_pop = sqrt.(population)
-    mean_population = mean(effect_pop)
-    dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
-    for c = 1:prm.ncities, d = 1:prm.ndays
-        dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
-    end
-    # Define objective
-    @objective(m, Min,
-        # Try to keep life as normal as possible
-        sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration[c] + 1:prm.window:prm.ndays) +
-        # Avoid large variations
-        sum(tot_var) -
-        # Try to enforce different cities to alternate the controls
-        10.0/(prm.rep^2)*sum(
-            minimum((effect_pop[c], effect_pop[cl]))*
-            minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
-            (rt[c, d] - rt[cl, d])^2
-            for c = 1:prm.ncities 
-            for cl = c + 1:prm.ncities 
-            for d = hammer_duration[c] + 1:prm.window:prm.ndays
-        )
-    )
-    if verbosity >= 1
-        println("Computing objective function... Ok!")
-    end
-
-    return m
 end
 
 
@@ -860,17 +763,18 @@ function window_control_multcities(prm, population, target, force_difference,
         prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
         # Estimula o bang-bang
-        0.1*prm.window*sum(force_difference[c, d]*effect_pop[c]/mean_population*
+        0.02*prm.alternate*prm.window*sum(
+            force_difference[c, d]*effect_pop[c]/mean_population*
             (prm.rep - rt[c, d])*(min_rt - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
         # Try to alternate within a single city.
-        0.1*prm.window/(prm.rep^2)*sum(
+        0.5*prm.alternate*prm.window/(prm.rep^2)*sum(
             force_difference[c, d]*(rt[c, d] - rt[c, d - prm.window])^2 
             for c = 1:prm.ncities 
             for d = hammer_duration[c] + prm.window + 1:prm.window:prm.ndays
         ) -
         # Try to enforce different cities to alternate the controls
-        1.0*prm.window/(prm.rep^2)*sum(
+        0.5*prm.alternate*prm.window/(prm.rep^2)*sum(
             minimum((effect_pop[c], effect_pop[cl]))*
             minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
             (rt[c, d] - rt[cl, d])^2

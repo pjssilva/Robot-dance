@@ -20,8 +20,8 @@ Julia.eval('include("robot_dance.jl")')
 print('Loading Robot-dance Julia module... Ok!')
 
 
-def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=8, 
-    need_icu=(0.0779*0.289), window=14, min_level=1.0):
+def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=7, 
+    need_icu=0.0185, alternate=1.0, window=14, min_level=1.0):
     """Save the basic_paramters.csv file using the data used in the report.
 
        All values are optional. If not present the values used in the report wihtout
@@ -36,6 +36,7 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=8,
     basic_prm["ndays"] = ndays
     basic_prm["time_icu"] = time_icu
     basic_prm["need_icu"] = need_icu
+    basic_prm["alternate"] = alternate
     basic_prm["window"] = window
     basic_prm["min_level"] = min_level
     basic_prm.to_csv(path.join("data", "basic_parameters.csv"), header=False)
@@ -134,8 +135,10 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
             population.append(city_pop)
             icu_capacity.append(city_data["icu_capacity"].iloc[0])
             if verbose > 0:
-                print("R0 in the start (after two weeks) %.6f, in last two weeks %.6f" % 
-                      (np.mean(rt[15:30]), np.mean(rt[-14:])))
+                S = parameters[city_name][0]
+                print("Mean effective R in the last two weeks = %.2f" % (S*np.mean(rt[-14:])))
+                # print("R0 in the start (after two weeks) %.6f, in last two weeks %.6f" % 
+                #       (np.mean(rt[15:30]), np.mean(rt[-14:])))
             else:
                 print()
         except ValueError:

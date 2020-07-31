@@ -118,6 +118,7 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.tinf = basic_prm["tinf"]
     Julia.time_icu = basic_prm["time_icu"]
     Julia.need_icu = basic_prm["need_icu"]
+    Julia.alternate = basic_prm["alternate"]
     Julia.rep = basic_prm["rep"]
     Julia.s1 = cities_data["S1"].values
     Julia.e1 = cities_data["E1"].values
@@ -134,21 +135,13 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.hammer_duration = hammer_data["duration"].values
     Julia.hammer_level = hammer_data["level"].values
     Julia.verbosity = verbosity
-    if basic_prm["window"] == 1:
-        Julia.eval("""
-            prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, 
-                                  r1, availICU, 1, out, sparse(M), sparse(M'))
-            m = control_multcities(prm, population, target, force_dif, hammer_duration, 
-                                   hammer_level, min_level, verbosity)
-        """)
-    else:
-        Julia.window = basic_prm["window"]
-        Julia.eval("""
-            prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, s1, e1, i1, 
-                                  r1, availICU, window, out, sparse(M), sparse(M'))
-            m = window_control_multcities(prm, population, target, force_dif, 
-                                          hammer_duration, hammer_level, min_level, verbosity);
-        """)
+    Julia.window = basic_prm["window"]
+    Julia.eval("""
+        prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
+                                s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(M'))
+        m = window_control_multcities(prm, population, target, force_dif, 
+                                        hammer_duration, hammer_level, min_level, verbosity);
+    """)
 
     # Check if there is a ramp parameter (delta_rt_max)
     # If so, add ramp constraints to the model
