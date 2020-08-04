@@ -10,6 +10,9 @@ import pandas as pd
 import numpy as np
 from scipy.integrate import solve_ivp
 from timeit import default_timer as timer
+from matplotlib import gridspec
+from matplotlib.patches import Rectangle
+from matplotlib.lines import Line2D
 import pylab as plt
 from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
@@ -452,9 +455,11 @@ def save_result(cities_names, filename):
     df = pd.DataFrame(df, columns=["City", "Variable"] + list(range(len(Julia.s[0,:]))))
     df.set_index(["City", "Variable"], inplace=True)
     df.to_csv(filename)
+    return df
 
 
-def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities, verbosity=0):
+def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities, 
+    start_date=None, verbosity=0):
     """Optimize and save figures and data for further processing.
     """
 
@@ -525,36 +530,134 @@ def optimize_and_show_results(i_fig, rt_fig, data_file, large_cities, verbosity=
 
     # Before saving anything, check if directory exists
     # Lets assume all output files are in the same directory
-    dir_output = path.split(i_fig)[0]
+    dir_output = path.split(figure_file)[0]
     if not path.exists(dir_output):
         os.makedirs(dir_output)
 
     if verbosity >= 1:
-        print('Plotting charts...')
-    for i in range(len(large_cities)):
-        plt.plot(Julia.rt[i, :], label=large_cities[i], lw=5, alpha=0.5)
-    plt.legend()
-    plt.title("Target reproduction rate")
-    plt.savefig(rt_fig)
-
-    plt.clf()
-    for i in range(len(large_cities)):
-        plt.plot(Julia.i[i, :], label=large_cities[i])
-    plt.legend()
-    plt.title("Infection level")
-    plt.savefig(i_fig)
-
-    if verbosity >= 1:
-        print('Plotting charts... Ok!')
-
-    if verbosity >= 1:
         print('Saving output files...')
     
-    save_result(large_cities, data_file)
+    result = save_result(large_cities, data_file)
     
     if verbosity >= 1:
         print('Saving output files... Ok!')
 
+    if verbosity >= 1:
+        print("Ploting result...")
+
+    plot_result(basic_prm, result, figure_file, start_date)
+    plt.savefig(figure_file, dpi=150)
+
+    if verbosity >= 1:
+        print("Ploting result... OK!")
+
+
+def plot_result(basic_prm, result, figure_file, start_date=None):
+    """Plot result in a single figure.
+    """
+    
+    # Get data
+    cities = result.index.get_level_values(0).unique()
+    max_city_len = np.max([len(c) for c in cities])
+    window = int(basic_prm["window"])
+    if start_date is not None:
+        start_date = pd.Timestamp(start_date)
+
+    # Find the maximal infected rates
+    ncities = len(cities)
+    max_i = np.zeros((ncities, 2))
+    for j in range(ncities):
+        city_name = cities[j]
+        i, rt = result.loc[city_name, "i"], result.loc[city_name, "rt"]
+        max_i[j, 0] = i.max()
+        non_minimal = (rt > rt.min()).argmax()
+        max_i[j, 1] = i.iloc[non_minimal:].max()
+                
+    # Create figure    
+    fig = plt.figure(figsize=(15, 1*ncities), constrained_layout=False)
+    gs = gridspec.GridSpec(ncities, 2, height_ratios=max_i[:, 0], width_ratios=[0.82, 0.18],
+        hspace=0, wspace=0)
+    # Colors for rt
+    bins = [0]
+    bins.extend(plt.linspace(1.0, 0.95*basic_prm["rep"], 5))
+    bins.append(basic_prm["rep"])
+    bins = np.array(bins)
+    colors = ['orangered','darkorange','gold','blue','green','aliceblue']
+    levels = ['Severe','High','Elevated','Moderate','Low','Open']
+    
+    ax = plt.subplot(gs[:, 1])
+    legend_elements = [Line2D([0], [0], color=colors[i], lw=4, label=levels[i]) for i in range(len(colors))]
+    ax.legend(handles=legend_elements, loc='upper right')
+    ax.set_axis_off()
+
+    for j in range(ncities):
+        # Get data
+        city_name = cities[j]
+        i, rt = result.loc[city_name, "i"], result.loc[city_name, "rt"]
+        ndays = len(i) - 1
+
+        # Prepare figure
+        ax = plt.subplot(gs[j, 0])
+
+        # Plot infected 
+        ax.plot([0, ndays], [max_i[j, 1], max_i[j, 1]], color="k", alpha=0.15)
+        ax.plot(i, color="k")
+        # # Show the basolute maximal level before hammer
+        # if max_i[j, 0] >= 1.2*max_i[j, 1]:
+        #     ax.plot([0, ndays], [max_i[j, 0], max_i[j, 0]], color="k", alpha=0.15)
+        
+        # Plot target R0(t)
+        for d in range(0, len(rt) - 1, window):
+            color_ind = np.searchsorted(bins, rt.iloc[d]) - 1
+            r = Rectangle((d, 0), min(window, ndays - d), 1.1*max_i[j, 0], 
+                          color=colors[color_ind])
+            ax.add_patch(r)
+
+        # Set up figure
+        ax.set_xticks([])
+        ax.set_xticklabels([])
+        ylabel_format = "{{:>{}s}}".format(max_city_len)
+        ax.set_ylabel(ylabel_format.format(city_name), rotation=0, horizontalalignment="left", labelpad=80)
+        if max_i[j, 0] >= 1.2*max_i[j, 1]:
+            # # Show absoltute maximal level before hammer
+            # ax.set_yticks(max_i[j, :])
+            # ax.set_yticklabels(["{:.2f}%".format(100*max_i[j, k]) for k in [0, 1]])
+            ax.set_yticks([max_i[j, 1]])
+            ax.set_yticklabels(["{:.2f}%".format(100*max_i[j, 1])])
+        else:
+            ax.set_yticks([max_i[j, 1]])
+            ax.set_yticklabels(["{:.2f}%".format(100*max_i[j, 1])])
+            
+        ax.yaxis.set_label_position("left")
+        ax.yaxis.tick_right()
+        # ax.tick_params(axis = "y", which = "both", left = False, right = False)
+
+        ax.spines['left'].set_color("darkgrey")
+        ax.spines['right'].set_color("darkgrey")
+        ax.spines['top'].set_color("darkgrey")
+        ax.spines['bottom'].set_color("darkgrey")
+        #ax.spines['bottom'].set_visible(False)
+
+        ax.set_xlim(0, ndays)
+        ax.set_ylim(0, 1.1*max_i[j, 0])
+
+        if j == 0:
+            ax.set_title("Infection level and target rt")
+
+    if start_date is None:
+        ax.set_xticks(np.arange(0, ndays, 30))
+    else:
+        ticks = pd.date_range(start_date, start_date + ndays*pd.to_timedelta("1D"), freq="1MS")
+        ticks = list(ticks)
+        if ticks[0] <= start_date + pd.to_timedelta("10D"):
+            ticks[0] = start_date
+        else:
+            ticks = [start_date] + ticks
+        ax.set_xticks([(i - start_date).days for i in ticks])
+        labels = [i.strftime('%d/%m/%Y') for i in ticks]
+        ax.set_xticklabels(labels, rotation=45, ha='right')
+
+    
 
 def main():
     """Allow call from the command line.
@@ -567,8 +670,8 @@ def main():
     force_dif = np.ones((ncities, ndays))
     find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=True, save_file=False, verbosity=verbosity)
     prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif, verbosity=verbosity)
-    optimize_and_show_results(f"{dir_output}/cmd_i_res.png", f"{dir_output}/cmd_rt_res.png",
-                              f"{dir_output}/cmd_res.csv", cities_data.index, verbosity=verbosity)
+    optimize_and_show_results(basic_prm, f"{dir_output}/cmd_res.png", 
+        f"{dir_output}/cmd_res.csv", cities_data.index, verbosity=verbosity)
     # check_error_optim(basic_prm, cities_data, mob_matrix, dir_output)
 
 if __name__ == "__main__":
