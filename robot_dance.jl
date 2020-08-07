@@ -391,6 +391,15 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     @variable(m, 0.0 <= e[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= i[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= r[1:prm.ncities, 1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= test[1:prm.ncities, 1:prm.ndays] <= 1.0)
+
+    # Constants that define the testing impact
+    tau = 2
+    cov_over_sars = 0.25
+    test_const = cov_over_sars * exp(-tau / (tau + prm.tinf))
+
+    # Effective I for the dynamics
+    @expression(m, ieff[c=1:prm.ncities, d=1:prm.ndays], i[c, d] - test_const*test[c, d])
 
     # Control variable
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
@@ -438,7 +447,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
         println("Defining SEIR equations...")
     end
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        si[c, t] == s[c, t]*i[c, t])
+        si[c, t] == s[c, t]*ieff[c, t])
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
         si_p_day[c, t]*p_day[c,t] == si[c, t])
     @expression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
@@ -519,10 +528,11 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ep[c, t] == e[c, t - 1] + de[c, t - 1]*dt)
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ip[c, t] == i[c, t - 1] + di[c, t - 1]*dt)
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], rp[c, t] == r[c, t - 1] + dr[c, t - 1]*dt)
+        @expression(m, ieffp[c=1:prm.ncities, t=2:prm.ndays], ip[c, t] - test_const*test[c, t])
 
         # Compute the gradients in the intermediate point.
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            spip[c, t] == sp[c, t]*ip[c, t])
+            spip[c, t] == sp[c, t]*ieffp[c, t])
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
             spip_p_day[c, t]*p_day[c,t] == spip[c, t])
         @expression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
@@ -634,11 +644,14 @@ function fit_initial(tinc, tinf, rep, time_icu, need_icu, data, ttv_weight=0.25)
     m = seir_model_with_free_initial_values(prm)
 
     # Initial state
-    s1, e1, i, r1, rt = m[:s][1, 1], m[:e][1, 1], m[:i], m[:r][1, 1], m[:rt]
+    s1, e1, i, r1, rt, test = m[:s][1, 1], m[:e][1, 1], m[:i], m[:r][1, 1], m[:rt], m[:test]
     set_start_value(r1, prm.r1[1])
     set_start_value(s1, prm.s1[1])
     set_start_value(e1, prm.e1[1])
     set_start_value(i[1, 1], prm.i1[1])
+    for c =1:prm.ncities, d=1:prm.ndays
+        fix(test[c, d], 0.0; force=true)
+    end
 
     # Define upper bounds on rt
     for t = 1:prm.window:prm.ndays
@@ -686,8 +699,12 @@ time windows.
 - min_rt: minimum rt achievable outside the hammer phases.
 """
 function window_control_multcities(prm, population, target, force_difference, 
-    hammer_duration=0, hammer=0.89, min_rt=1.0, verbosity=0)
+    hammer_duration=0, hammer=0.89, min_rt=1.0, verbosity=0, test_budget=0)
     @assert sum(mod.(hammer_duration, prm.window)) == 0
+
+    # TODO: Define how to make this constant available here and in the definition
+    # of the model.
+    cov_over_sars = 0.25
 
     m = seir_model(prm, verbosity)
 
@@ -743,6 +760,19 @@ function window_control_multcities(prm, population, target, force_difference,
     #     i[c, d] <= target[c, d]*availICU[c]
     # )
 
+    # Constraints on the tests
+    test, i = m[:test], m[:i]
+    @constraint(m, use_test_available,
+        sum(population[c]*sum(test[c, d] for d = 1:prm.ndays) for c = 1:prm.ncities) <= 
+        test_budget
+    )
+    @constraint(m, max_day[d=1:prm.ndays],
+        sum(population[c]*test[c, d] for c = 1:prm.ncities) <= 20000
+    )
+    @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
+        test[c, d] <= 1.0/cov_over_sars * i[c, d]
+    )
+        
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
     end
@@ -897,3 +927,5 @@ function playground(prm, population, target, final_target, hammer_durarion)
 
     return m
 end
+
+

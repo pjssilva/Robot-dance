@@ -13,6 +13,7 @@ from timeit import default_timer as timer
 from matplotlib import gridspec
 from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
+from matplotlib import cm
 import pylab as plt
 from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
@@ -112,7 +113,8 @@ def read_data(options, verbosity=0):
     return basic_prm, cities_data, mob_matrix, target, hammer_data
 
 
-def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif=1, verbosity=0):
+def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, 
+    force_dif=1, verbosity=0, test_budget=0):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
@@ -139,11 +141,12 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.hammer_level = hammer_data["level"].values
     Julia.verbosity = verbosity
     Julia.window = basic_prm["window"]
+    Julia.test_budget = test_budget
     Julia.eval("""
         prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
-                                s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(M'))
-        m = window_control_multcities(prm, population, target, force_dif, 
-                                        hammer_duration, hammer_level, min_level, verbosity);
+            s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(M'))
+        m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
+            hammer_level, min_level, verbosity, test_budget);
     """)
 
     # Check if there is a ramp parameter (delta_rt_max)
@@ -205,7 +208,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
-            target_hammer[c] = 0.8*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
+            target_hammer[c] = 0.75*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
             i_after_hammer[c] = basic_prm["time_icu"]*basic_prm["need_icu"]*max(
                 isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 
@@ -217,7 +220,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
                 feas_model = False
             else:
                 if verbosity >= 2:
-                    print(f'{cities_data.index[c]} is fine after {hammer_duration[c]} days of hammer (infected = {i_after_hammer[c]:.2e}, target = {target_hammer[c]:.2e})')
+                    print(f'{cities_data.index[c]} is fine after {hammer_duration[c]} days of hammer (infected = {i_after_hammer[c]:.2g}, target = {target_hammer[c]})')
 
         if feas_model == False:
             # There is at least one city violating the target after hammer
@@ -444,6 +447,7 @@ def save_result(cities_names, filename):
     """
     Julia.eval("s = value.(m[:s]); e = value.(m[:e]); i = value.(m[:i]); r = value.(m[:r])")
     Julia.eval("rt = expand(value.(m[:rt]), prm)")
+    Julia.eval("test = value.(m[:test])")
     df = []
     for i in range(len(cities_names)):
         c = cities_names[i]
@@ -451,17 +455,20 @@ def save_result(cities_names, filename):
         df.append([c, "e"] + list(Julia.e[i, :])) 
         df.append([c, "i"] + list(Julia.i[i, :])) 
         df.append([c, "r"] + list(Julia.r[i, :])) 
-        df.append([c, "rt"] + list(Julia.rt[i, :])) 
+        df.append([c, "rt"] + list(Julia.rt[i, :]))
+        df.append([c, "test"] + list(Julia.test[i, :]))
     df = pd.DataFrame(df, columns=["City", "Variable"] + list(range(len(Julia.s[0,:]))))
     df.set_index(["City", "Variable"], inplace=True)
     df.to_csv(filename)
     return df
 
 
-def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities, 
+def optimize_and_show_results(basic_prm, figure_file, data_file, cities, 
     start_date=None, verbosity=0):
     """Optimize and save figures and data for further processing.
     """
+    cities_names = cities.index
+    population = cities["population"].values
 
     if verbosity >= 1:
         print('Solving Robot-dance...')
@@ -470,16 +477,19 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
         optimize!(m)
         pre_rt = value.(m[:rt]); i = value.(m[:i])
         rt = expand(pre_rt, prm)
+        test = value.(m[:test])
     """)
 
     if verbosity >= 1:
         print('Solving Robot-dance... Ok!')
+        print("Total tests used ", end="")
+        print((Julia.test.T*population).sum())
 
     if verbosity >= 1:
         print('')
         print('-----')
         print('Number of rt changes in each city')
-        for (i, c) in enumerate(large_cities):
+        for (i, c) in enumerate(cities_names):
             changes_rt = len(np.diff(Julia.rt[i]).nonzero()[0]) + 1
             print(f'{c}: {changes_rt}')
         print('-----')
@@ -487,7 +497,7 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
         print('')
         print('-----')
         print('Average fraction of infected')
-        for (i, c) in enumerate(large_cities):
+        for (i, c) in enumerate(cities_names):
             i_avg = sum(Julia.i[i])/len(Julia.i[i])
             print(f'{c}: {i_avg}')
         print('-----')
@@ -495,7 +505,7 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
         print('')
         print('-----')
         print('Number of days open (rt = 2.5)')
-        for (i,c) in enumerate(large_cities):
+        for (i,c) in enumerate(cities_names):
             rt = Julia.rt[i]
             inds = np.nonzero(rt >= 2.4)[0]
             count_open_total = len(inds)
@@ -513,7 +523,7 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
         print('')
         print('-----')
         print('Number of days in lockdown (rt <= 1.1)')
-        for (i,c) in enumerate(large_cities):
+        for (i,c) in enumerate(cities_names):
             rt = Julia.rt[i]
             inds = np.nonzero(rt <= 1.1)[0]
             count_open_total = len(inds)
@@ -537,7 +547,7 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
     if verbosity >= 1:
         print('Saving output files...')
     
-    result = save_result(large_cities, data_file)
+    result = save_result(cities_names, data_file)
     
     if verbosity >= 1:
         print('Saving output files... Ok!')
@@ -545,16 +555,25 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
     if verbosity >= 1:
         print("Ploting result...")
 
-    plot_result(basic_prm, result, figure_file, start_date)
+    name, extension = os.path.splitext(figure_file)
+
+    figure_file =  name + "-rt" + extension
+    plot_result(basic_prm, result, figure_file, start_date, type="rt")
+    plt.savefig(figure_file, dpi=150)
+
+    figure_file =  name + "-test" + extension
+    plot_result(basic_prm, result, figure_file, start_date, type="test")
     plt.savefig(figure_file, dpi=150)
 
     if verbosity >= 1:
         print("Ploting result... OK!")
 
 
-def plot_result(basic_prm, result, figure_file, start_date=None):
+def plot_result(basic_prm, result, figure_file, start_date=None, type="test"):
     """Plot result in a single figure.
     """
+    # TODO: Put this constant out
+    sars_over_cov = 4.0
     
     # Get data
     cities = result.index.get_level_values(0).unique()
@@ -584,16 +603,28 @@ def plot_result(basic_prm, result, figure_file, start_date=None):
     bins = np.array(bins)
     colors = ['orangered','darkorange','gold','blue','green','aliceblue']
     levels = ['Severe','High','Elevated','Moderate','Low','Open']
+    test_colors = cm.get_cmap('jet', 100*sars_over_cov)
     
+    # Plot the legend
     ax = plt.subplot(gs[:, 1])
-    legend_elements = [Line2D([0], [0], color=colors[i], lw=4, label=levels[i]) for i in range(len(colors))]
-    ax.legend(handles=legend_elements, loc='upper right')
-    ax.set_axis_off()
+    if type == "rt":
+        legend_elements = [Line2D([0], [0], color=colors[i], lw=4, label=levels[i]) for i in range(len(colors))]
+        ax.legend(handles=legend_elements, loc='upper right')
+        ax.set_axis_off()
+    else:
+        n_values = int(100*sars_over_cov) + 1 
+        values = sars_over_cov*plt.linspace(1, 0, n_values) 
+        ax.imshow(values.reshape(n_values, 1), cmap=test_colors, aspect=0.05, alpha=0.7) 
+        ax.set_xticks([]) 
+        ax.set_yticks(plt.arange(0, n_values, 50)) 
+        ax.set_yticklabels(values[::50]) 
+        ax.yaxis.tick_right() 
 
     for j in range(ncities):
         # Get data
         city_name = cities[j]
         i, rt = result.loc[city_name, "i"], result.loc[city_name, "rt"]
+        test = result.loc[city_name, "test"] / (4.0*i)
         ndays = len(i) - 1
 
         # Prepare figure
@@ -602,16 +633,23 @@ def plot_result(basic_prm, result, figure_file, start_date=None):
         # Plot infected 
         ax.plot([0, ndays], [max_i[j, 1], max_i[j, 1]], color="k", alpha=0.15)
         ax.plot(i, color="k")
-        # # Show the basolute maximal level before hammer
+        # # Show the absolute maximal level before hammer
         # if max_i[j, 0] >= 1.2*max_i[j, 1]:
         #     ax.plot([0, ndays], [max_i[j, 0], max_i[j, 0]], color="k", alpha=0.15)
         
-        # Plot target R0(t)
-        for d in range(0, len(rt) - 1, window):
-            color_ind = np.searchsorted(bins, rt.iloc[d]) - 1
-            r = Rectangle((d, 0), min(window, ndays - d), 1.1*max_i[j, 0], 
-                          color=colors[color_ind])
-            ax.add_patch(r)
+        if type == "rt":
+            # Plot target R0(t)
+            for d in range(0, len(rt) - 1, window):
+                color_ind = np.searchsorted(bins, rt.iloc[d]) - 1
+                r = Rectangle((d, 0), min(window, ndays - d), 1.1*max_i[j, 0], 
+                            color=colors[color_ind])
+                ax.add_patch(r)
+        else:
+            # Plot target test
+            for d in range(0, len(test) - 1):
+                r = Rectangle((d, 0), 1, 1.1*max_i[j, 0], color=test_colors(test[d]), 
+                    alpha=0.7, linewidth=0)
+                ax.add_patch(r)
 
         # Set up figure
         ax.set_xticks([])
@@ -642,7 +680,10 @@ def plot_result(basic_prm, result, figure_file, start_date=None):
         ax.set_ylim(0, 1.1*max_i[j, 0])
 
         if j == 0:
-            ax.set_title("Infection level and target rt")
+            if type == "rt":
+                ax.set_title("Infection level and target rt")
+            else:
+                ax.set_title("Infection level and target testing")
 
     if start_date is None:
         ax.set_xticks(np.arange(0, ndays, 30))

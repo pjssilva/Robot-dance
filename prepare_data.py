@@ -136,10 +136,8 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
             icu_capacity.append(city_data["icu_capacity"].iloc[0])
             if verbose > 0:
                 S = parameters[city_name][0]
-                print(f"{(i + 1):2d}/{n_cities} {city_name:<30s} ", end = "")
+                print(f"{i + 1}/{n_cities} {city_name:<30s} ", end = "")
                 print(f"Mean effective R in the last two weeks = {S*np.mean(rt[-14:]):.2f}")
-            else:
-                print()
         except ValueError:
             print("Ignoring ", city_name, "not enough data.")
             ignored.append(city_name)    
