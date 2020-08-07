@@ -205,7 +205,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
-            target_hammer[c] = 0.75*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
+            target_hammer[c] = 0.8*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
             i_after_hammer[c] = basic_prm["time_icu"]*basic_prm["need_icu"]*max(
                 isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 
@@ -217,7 +217,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
                 feas_model = False
             else:
                 if verbosity >= 2:
-                    print(f'{cities_data.index[c]} is fine after {hammer_duration[c]} days of hammer (infected = {i_after_hammer[c]:.2g}, target = {target_hammer[c]})')
+                    print(f'{cities_data.index[c]} is fine after {hammer_duration[c]} days of hammer (infected = {i_after_hammer[c]:.2e}, target = {target_hammer[c]:.2e})')
 
         if feas_model == False:
             # There is at least one city violating the target after hammer

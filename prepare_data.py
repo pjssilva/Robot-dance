@@ -125,9 +125,9 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     population = []
     icu_capacity = []
     n_cities = len(large_cities)
+    print()
     for i in range(n_cities):
         city_name = large_cities[i]
-        print("%3d/%3d" %(i + 1, n_cities), "%-30s" % city_name, end=" ")
         try:
             city_data = epi_data[epi_data["city"] == city_name]
             parameters[city_name], rt, observed_I, city_pop = initial_conditions(basic_prm, 
@@ -136,9 +136,8 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
             icu_capacity.append(city_data["icu_capacity"].iloc[0])
             if verbose > 0:
                 S = parameters[city_name][0]
-                print("Mean effective R in the last two weeks = %.2f" % (S*np.mean(rt[-14:])))
-                # print("R0 in the start (after two weeks) %.6f, in last two weeks %.6f" % 
-                #       (np.mean(rt[15:30]), np.mean(rt[-14:])))
+                print(f"{(i + 1):2d}/{n_cities} {city_name:<30s} ", end = "")
+                print(f"Mean effective R in the last two weeks = {S*np.mean(rt[-14:]):.2f}")
             else:
                 print()
         except ValueError:
