@@ -751,7 +751,7 @@ function window_control_multcities(prm, population, target, force_difference,
     if verbosity >= 1
         println("Computing objective function...")
     end
-    effect_pop = sqrt.(population)
+    effect_pop = population # You may try to use other metrics like sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
