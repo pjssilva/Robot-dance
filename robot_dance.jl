@@ -394,9 +394,9 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     @variable(m, 0.0 <= test[1:prm.ncities, 1:prm.ndays] <= 1.0)
 
     # Constants that define the testing impact
-    tau = 2
+    tau = 5
     cov_over_sars = 0.25
-    test_const = cov_over_sars * exp(-tau / (tau + prm.tinf))
+    test_const = 0.2*cov_over_sars * exp(-tau / (tau + prm.tinf))
 
     # Effective I for the dynamics
     @expression(m, ieff[c=1:prm.ncities, d=1:prm.ndays], i[c, d] - test_const*test[c, d])
@@ -781,7 +781,7 @@ function window_control_multcities(prm, population, target, force_difference,
     if verbosity >= 1
         println("Computing objective function...")
     end
-    effect_pop = sqrt.(population)
+    effect_pop = population # Maybe use an alternative weight as sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
