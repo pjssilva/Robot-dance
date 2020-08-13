@@ -156,8 +156,10 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
         """)
 
 
-def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=False, save_file=False, verbosity=0):
-    """Find hammer durations for each city such that the optimization problem will (hopefully) be feasible
+def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, 
+    out_file=None, incr_all=False, verbosity=0):
+    """Find hammer durations for each city such that the optimization problem will 
+    (hopefully) be feasible
     """
     if verbosity >= 1:
         print('Checking if initial hammer is long enough...')
@@ -184,14 +186,11 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
     t_total1 = timer()
     while feas_model == False:
         t_solve1 = timer()
-        sol = solve_ivp(_robot_dance_hammer, tspan, y0, t_eval=teval, args=(basic_prm["tinc"], \
-                                                                        basic_prm["tinf"], \
-                                                                        ncities, \
-                                                                        M, \
-                                                                        out, \
-                                                                        min_rt, \
-                                                                        hammer_level, \
-                                                                        hammer_duration))
+        sol = solve_ivp(_robot_dance_hammer, tspan, y0, t_eval=teval, args=(
+                basic_prm["tinc"], basic_prm["tinf"], ncities, M, out, min_rt, 
+                hammer_level, hammer_duration
+            )
+        )
         t_solve2 = timer()
         if verbosity >= 2:
             print(f'Time to simulate: {t_solve2-t_solve1:.2g}')
@@ -199,9 +198,9 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         tsim = sol.t
         isim = sol.y[2*ncities:3*ncities]
 
-        # Get the max number of infected after hammer
-        # (usually it's the number of infected immediately after hammer, but this might not work if hammer_duration = 0)
-        # (so let's use a safer implementation)
+        # Get the max number of infected after hammer (usually it's the number
+        # of infected immediately after hammer, but this might not work if
+        # hammer_duration = 0) (so let's use a safer implementation)
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
@@ -243,20 +242,18 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         iter += 1
 
     t_total2 = timer()
-    if verbosity >= 2:
+    if verbosity >= 1:
         print('')
         print(f'Number of iterations: {iter}')
         print(f'Total time: {t_total2-t_total1} s')
-        print('Hammer duration')
-        for c in range(ncities):
-            print(f'{cities_data.index[c]}: {hammer_duration[c]} days')
+        print()
+        print("Hammer data")
+        print(hammer_data)
 
-    if save_file == True:
+    if out_file is not None:
         if verbosity >= 1:
             print('Saving hammer data file')
-        # TODO: Since this funciton is to be called from a program and not only from the 
-        # command line it does not make sense to have option.???? here. 
-        hammer_data.to_csv(options.hammer_data)
+        hammer_data.to_csv(out_file)
 
     if verbosity >= 1:
         print('Checking if initial hammer is long enough... Ok!')
@@ -458,11 +455,11 @@ def save_result(cities_names, filename):
     return df
 
 
-def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities, 
-    start_date=None, verbosity=0):
+def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, verbosity=0):
     """Optimize and save figures and data for further processing.
     """
 
+    large_cities = cities_data.index
     if verbosity >= 1:
         print('Solving Robot-dance...')
 
@@ -475,58 +472,57 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
     if verbosity >= 1:
         print('Solving Robot-dance... Ok!')
 
+    bins = [0]
+    bins.extend(plt.linspace(1.0, 0.95*basic_prm["rep"], 5))
+    bins.append(basic_prm["rep"])
+
+    stats = pd.DataFrame(index=large_cities)
+    changes_rt = []
+    for (i, c) in enumerate(large_cities):
+        changes_rt.append(len(np.diff(Julia.rt[i]).nonzero()[0]) + 1)
+    stats["Rt changes"] = changes_rt
+
+    i_avg, max_i = [], []
+    for (i, c) in enumerate(large_cities):
+        maximum = 100*Julia.i[i, Julia.hammer_duration[i]:].max()
+        average = 100*sum(Julia.i[i])/len(Julia.i[i])
+        max_i.append(f"{maximum:.3f}%")
+        i_avg.append(f"{average:.3f}%")
+    stats["Avg. I"] = i_avg
+    stats["Max I"] = max_i
+        
+    total, mean = [], []
+    for (i,c) in enumerate(large_cities):
+        rt = Julia.rt[i]
+        inds = np.nonzero(rt >= bins[-2])[0]
+        count_open_total = len(inds)
+        thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
+        thresh_open = np.insert(thresh_open, 0, 0)
+        thresh_open = np.append(thresh_open, len(inds))
+        count_open = np.diff(thresh_open)
+        total.append(count_open_total)
+        mean.append(np.mean(count_open))
+    stats["Open"] = total
+    stats["Mean open"] = mean
+
+    total, mean = [], []
+    for (i,c) in enumerate(large_cities):
+        rt = Julia.rt[i]
+        inds = np.nonzero(rt < bins[2])[0]
+        count_open_total = len(inds)
+        thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
+        thresh_open = np.insert(thresh_open, 0, 0)
+        thresh_open = np.append(thresh_open, len(inds))
+        count_open = np.diff(thresh_open)
+        total.append(count_open_total)
+        mean.append(np.mean(count_open))
+    stats["Closed"] = total
+    stats["Mean closed"] = mean
+
     if verbosity >= 1:
-        print('')
-        print('-----')
-        print('Number of rt changes in each city')
-        for (i, c) in enumerate(large_cities):
-            changes_rt = len(np.diff(Julia.rt[i]).nonzero()[0]) + 1
-            print(f'{c}: {changes_rt}')
-        print('-----')
-
-        print('')
-        print('-----')
-        print('Average fraction of infected')
-        for (i, c) in enumerate(large_cities):
-            i_avg = sum(Julia.i[i])/len(Julia.i[i])
-            print(f'{c}: {i_avg}')
-        print('-----')
-            
-        print('')
-        print('-----')
-        print('Number of days open (rt = 2.5)')
-        for (i,c) in enumerate(large_cities):
-            rt = Julia.rt[i]
-            inds = np.nonzero(rt >= 2.4)[0]
-            count_open_total = len(inds)
-            thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
-            thresh_open = np.insert(thresh_open, 0, 0)
-            thresh_open = np.append(thresh_open, len(inds))
-            count_open = np.diff(thresh_open)
-            print(f'{c}: {count_open_total} days total')
-            for (i,n) in enumerate(count_open):
-                print(f'Opening {i+1}: {n} days')
-            print(f'Average: {np.mean(count_open):.0f} days')
-            print('')
-        print('-----')
-
-        print('')
-        print('-----')
-        print('Number of days in lockdown (rt <= 1.1)')
-        for (i,c) in enumerate(large_cities):
-            rt = Julia.rt[i]
-            inds = np.nonzero(rt <= 1.1)[0]
-            count_open_total = len(inds)
-            thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
-            thresh_open = np.insert(thresh_open, 0, 0)
-            thresh_open = np.append(thresh_open, len(inds))
-            count_open = np.diff(thresh_open)
-            print(f'{c}: {count_open_total} days total')
-            for (i,n) in enumerate(count_open):
-                print(f'Lockdown {i+1}: {n} days')
-            print(f'Average: {np.mean(count_open):.0f} days')
-            print('')
-        print('-----')
+        print()
+        print("Statistics")
+        print(stats)
 
     # Before saving anything, check if directory exists
     # Lets assume all output files are in the same directory
@@ -545,11 +541,13 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, large_cities,
     if verbosity >= 1:
         print("Ploting result...")
 
-    plot_result(basic_prm, result, figure_file, start_date)
+    plot_result(basic_prm, result, figure_file, cities_data["start_date"][0])
     plt.savefig(figure_file, dpi=150)
 
     if verbosity >= 1:
         print("Ploting result... OK!")
+
+    return stats
 
 
 def plot_result(basic_prm, result, figure_file, start_date=None):
@@ -662,14 +660,17 @@ def plot_result(basic_prm, result, figure_file, start_date=None):
 def main():
     """Allow call from the command line.
     """
-    verbosity = 1   # 0: print nothing, 1: print min info, 2: more detailed, including solver progress
+    verbosity = 1 # 0: print nothing, 1: print min info (with solver progress), 
+                  # 2: even more detailed
     dir_output = "results"
     options = get_options()
     basic_prm, cities_data, mob_matrix, target, hammer_data = read_data(options)
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     force_dif = np.ones((ncities, ndays))
-    find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=True, save_file=False, verbosity=verbosity)
-    prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif, verbosity=verbosity)
+    find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, 
+        out_file=options.hammer_data, incr_all=True, verbosity=verbosity)
+    prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif, 
+        verbosity=verbosity)
     optimize_and_show_results(basic_prm, f"{dir_output}/cmd_res.png", 
         f"{dir_output}/cmd_res.csv", cities_data.index, verbosity=verbosity)
     # check_error_optim(basic_prm, cities_data, mob_matrix, dir_output)

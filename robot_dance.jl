@@ -370,7 +370,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     end
 
     verbosity_ipopt = 0
-    if verbosity >= 2
+    if verbosity >= 1
         verbosity_ipopt = 5 # Print summary and progress
     end
 

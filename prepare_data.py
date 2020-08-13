@@ -13,7 +13,6 @@ print('Loading PyJulia module...')
 from julia.api import Julia
 jl = Julia(compiled_modules=False)
 from julia import Main as Julia
-Julia.eval('ENV["OMP_NUM_THREADS"] = 8')
 print('Loading PyJulia module... Ok!')
 print('Loading Robot-dance Julia module...')
 Julia.eval('include("robot_dance.jl")')
@@ -158,6 +157,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
         orient="index", columns=["S1", "E1", "I1", "R1"])
     cities_data["population"] = population
     cities_data["icu_capacity"] = icu_capacity
+    cities_data["start_date"] = epi_data["date"].max()
     cities_data.to_csv(path.join("data", "cities_data.csv"))
     return cities_data
 
