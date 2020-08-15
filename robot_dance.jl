@@ -34,7 +34,9 @@ Parameters to define a SEIR model:
 - M: Matrix that has at position (i, j) how much population goes from city i to city j, the
     proportion with respect to the population of the destiny (j). It should have 0 on the
     diagonal.
-- Mt: transpose of M.
+- Mt: Matrix that has at position (i, j) how much population goes from city j to city i, the
+    proportion with respect to the population of the origin (j). It should have 0 on the
+    diagonal.
 """
 struct SEIR_Parameters
     # Basic epidemiological constants that define the SEIR model
@@ -370,7 +372,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     end
 
     verbosity_ipopt = 0
-    if verbosity >= 2
+    if verbosity >= 1
         verbosity_ipopt = 5 # Print summary and progress
     end
 
@@ -399,7 +401,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     test_const = 0.2*cov_over_sars * exp(-tau / (tau + prm.tinf))
 
     # Effective I for the dynamics
-    @expression(m, ieff[c=1:prm.ncities, d=1:prm.ndays], i[c, d] - test_const*test[c, d])
+    @expression(m, itest[c=1:prm.ncities, d=1:prm.ndays], i[c, d] - test_const*test[c, d])
 
     # Control variable
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
@@ -409,32 +411,59 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     # Obs. I tried many variations, only adding the variable below worded the best.
     #      I tried to get rid of all SEIR variables and use only the initial conditions.
     #      Add variables for sp, ep, ip, rp. Add a variable to represent s times i.
-    @variable(m, 0.1 <= p_day[1:prm.ncities, t=1:prm.ndays])
-    @variable(m, 0.0 <= si[1:prm.ncities, t=1:prm.ndays] <= 1.0)
-    @variable(m, 0.0 <= si_p_day[1:prm.ncities, t=1:prm.ndays])
+    # @variable(m, p_eff_p_c[1:prm.ncities, 1:prm.ndays])
+    @variable(m, i_eff_p_c[1:prm.ncities, 1:prm.ndays])
+    @variable(m, i_eff[1:prm.ncities, t=1:prm.ndays])
+    @variable(m, rti_eff[1:prm.ncities, t=1:prm.ndays])
+    @variable(m, rti[1:prm.ncities, t=1:prm.ndays])
     if verbosity >= 1
         println("Adding variables to the model... Ok!")
     end
 
     # Expressions that define "sub-states"
 
-    # enter denotes the proportion of the population that enter city c during
-    # the day.
+    # Parameter that determines the proportion of I that can not travel.
+    FIXED_I = 1.0
+    CAN_TRAVEL_I = 1.0 - FIXED_I
+
     if verbosity >= 1
         println("Defining additional expressions...")
     end
-    @expression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
-        sum(prm.M[k, c]*(1.0 - i[k, t]) for k in coli_M[c])
-    )
-    # p_day is the ratio that the population of a city varies during the day
-    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        p_day[c, t] == (1.0 - prm.out[c]) + prm.out[c]*i[c, t] + enter[c, t]
-    )
-    if verbosity >= 1
-        println("Defining additional expressions... Ok!")
+
+    if FIXED_I > 0
+        @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays],
+            1.0 - FIXED_I*itest[c, t]
+        )
+    else
+        @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays], 1.0)
     end
 
+    # p_eff_p_c denotes the proportion of the effective population at city c
+    # during the day divided by the original population of city c
+    @expression(m, p_eff_p_c[c=1:prm.ncities, t=1:prm.ndays],
+        1.0 - prm.out[c]*can_travel[c, t] + 
+            sum(prm.M[k, c]*can_travel[k, t] for k in coli_M[c])
+    )
+    # i_eff_p_c denotes the proportion of the effective number of infected at city c
+    # during the day divided by the original population of city c
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        i_eff_p_c[c, t] == (1.0 - prm.out[c]*CAN_TRAVEL_I)*itest[c, t] +
+            sum(prm.M[k, c]*CAN_TRAVEL_I*itest[k, t] for k in coli_M[c])
+    )
+    # i_eff is the effective ratio of inffected in city c
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays], 
+        i_eff[c, t]*p_eff_p_c[c, t] == i_eff_p_c[c, t]
+    )
 
+    # rti is rt at city c times the i_eff at city c
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        rti_eff[c, t] == rt[c, mapind(t, prm)]*i_eff[c, t]
+    )
+
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        rti[c, t] == rt[c, mapind(t, prm)]*itest[c, t]
+    )
+    
     # Parameter that measures how much important is the infection during the day
     # when compared to the night.
     α = 2/3
@@ -446,18 +475,12 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     if verbosity >= 1
         println("Defining SEIR equations...")
     end
-    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        si[c, t] == s[c, t]*ieff[c, t])
-    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        si_p_day[c, t]*p_day[c,t] == si[c, t])
-    @expression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
-        sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*si_p_day[k, t] for k = coli_Mt[c])
-    )
     @expression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
         -1.0/prm.tinf*(
-         α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*si_p_day[c, t] +
-             t1[c, t] ) +
-         (1 - α)*rt[c, mapind(t, prm)]*si[c, t])
+        α*( (1.0 - prm.out[c])*s[c, t]*rti_eff[c, t] +
+            sum(prm.Mt[k, c]*s[c, t]*rti_eff[k, t] for k = coli_Mt[c]) ) +
+        (1 - α)*s[c, t]*rti[c, t]
+       )
     )
     @expression(m, de[c=1:prm.ncities, t=1:prm.ndays],
         -ds[c, t] - (1.0/prm.tinc)*e[c,t]
@@ -504,74 +527,73 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
         if verbosity >= 1
             println("Discretizing SEIR equations... Ok!")
         end
-    elseif discr_method == "heun"
-        if verbosity >= 1
-            println("Discretizing SEIR equations (Heun)...")
-            println("Adding variables for the intermediate point to the model...")
-        end
-        @variable(m, 0.0 <= sp[1:prm.ncities, 2:prm.ndays] <= 1.0)
-        @variable(m, 0.0 <= ep[1:prm.ncities, 2:prm.ndays] <= 1.0)
-        @variable(m, 0.0 <= ip[1:prm.ncities, 2:prm.ndays] <= 1.0)
-        @variable(m, 0.0 <= rp[1:prm.ncities, 2:prm.ndays] <= 1.0)
-        @variable(m, 0.0 <= spip[1:prm.ncities, t=1:prm.ndays] <= 1.0)
-        @variable(m, 0.0 <= spip_p_day[1:prm.ncities, t=1:prm.ndays])
-        if verbosity >= 1
-            println("Adding variables for the intermediate point to the model... Ok!")
-        end
+    # elseif discr_method == "heun"
+    #     if verbosity >= 1
+    #         println("Discretizing SEIR equations (Heun)...")
+    #         println("Adding variables for the intermediate point to the model...")
+    #     end
+    #     @variable(m, 0.0 <= sp[1:prm.ncities, 2:prm.ndays] <= 1.0)
+    #     @variable(m, 0.0 <= ep[1:prm.ncities, 2:prm.ndays] <= 1.0)
+    #     @variable(m, 0.0 <= ip[1:prm.ncities, 2:prm.ndays] <= 1.0)
+    #     @variable(m, 0.0 <= rp[1:prm.ncities, 2:prm.ndays] <= 1.0)
+    #     @variable(m, 0.0 <= spip[1:prm.ncities, t=1:prm.ndays] <= 1.0)
+    #     @variable(m, 0.0 <= spip_p_day[1:prm.ncities, t=1:prm.ndays])
+    #     if verbosity >= 1
+    #         println("Adding variables for the intermediate point to the model... Ok!")
+    #     end
 
-        # Do the Euler step from the point in time t - 1 computing the intermediate
-        # point that we express as ?p (p is for plus).
-        if verbosity >= 1
-            println("Adding constraints for the intermediate point...")
-        end
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], sp[c, t] == s[c, t - 1] + ds[c, t - 1]*dt)
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ep[c, t] == e[c, t - 1] + de[c, t - 1]*dt)
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ip[c, t] == i[c, t - 1] + di[c, t - 1]*dt)
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], rp[c, t] == r[c, t - 1] + dr[c, t - 1]*dt)
-        @expression(m, ieffp[c=1:prm.ncities, t=2:prm.ndays], ip[c, t] - test_const*test[c, t])
+    #     # Do the Euler step from the point in time t - 1 computing the intermediate
+    #     # point that we express as ?p (p is for plus).
+    #     if verbosity >= 1
+    #         println("Adding constraints for the intermediate point...")
+    #     end
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], sp[c, t] == s[c, t - 1] + ds[c, t - 1]*dt)
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ep[c, t] == e[c, t - 1] + de[c, t - 1]*dt)
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ip[c, t] == i[c, t - 1] + di[c, t - 1]*dt)
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], rp[c, t] == r[c, t - 1] + dr[c, t - 1]*dt)
 
-        # Compute the gradients in the intermediate point.
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            spip[c, t] == sp[c, t]*ieffp[c, t])
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            spip_p_day[c, t]*p_day[c,t] == spip[c, t])
-        @expression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
-            sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*spip_p_day[k, t] for k = coli_Mt[c])
-        )
-        @expression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
-            -1.0/prm.tinf*(
-            α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*spip_p_day[c, t] +
-                t2[c, t] ) +
-            (1 - α)*rt[c, mapind(t, prm)]*spip[c, t])
-        )
-        @expression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
-            -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
-        )
-        @expression(m, dip[c=1:prm.ncities, t=2:prm.ndays],
-            (1.0/prm.tinc)*ep[c, t] - (1.0/prm.tinf)*ip[c, t]
-        )
-        @expression(m, drp[c=1:prm.ncities, t=2:prm.ndays],
-            (1.0/prm.tinf)*ip[c, t]
-        )
-        if verbosity >= 1
-            println("Adding constraints for the intermediate point... Ok!")
-        end
+    #     # Compute the gradients in the intermediate point.
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+    #         spip[c, t] == sp[c, t]*ip[c, t])
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+    #         spip_p_day[c, t]*p_day[c,t] == spip[c, t])
+    #     @expression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
+    #         sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*spip_p_day[k, t] for k = coli_Mt[c])
+    #     )
+    #     @expression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
+    #         -1.0/prm.tinf*(
+    #         α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*spip_p_day[c, t] +
+    #             t2[c, t] ) +
+    #         (1 - α)*rt[c, mapind(t, prm)]*spip[c, t])
+    #     )
+    #     @expression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
+    #         -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
+    #     )
+    #     @expression(m, dip[c=1:prm.ncities, t=2:prm.ndays],
+    #         (1.0/prm.tinc)*ep[c, t] - (1.0/prm.tinf)*ip[c, t]
+    #     )
+    #     @expression(m, drp[c=1:prm.ncities, t=2:prm.ndays],
+    #         (1.0/prm.tinf)*ip[c, t]
+    #     )
+    #     if verbosity >= 1
+    #         println("Adding constraints for the intermediate point... Ok!")
+    #     end
 
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt
-        )
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt
-        )
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt
-        )
-        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt
-        )
-        if verbosity >= 1
-            println("Discretizing SEIR equations (Heun)... Ok!")
-        end
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+    #         s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt
+    #     )
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+    #         e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt
+    #     )
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+    #         i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt
+    #     )
+    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+    #         r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt
+    #     )
+    #     if verbosity >= 1
+    #         println("Discretizing SEIR equations (Heun)... Ok!")
+    #     end
     else
         throw("Invalid discretization method")
     end
@@ -749,12 +771,15 @@ function window_control_multcities(prm, population, target, force_difference,
     # in the time window that is necessary for the patients to leave ICU is not
     # larger than the number of ICUs available. 
     @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - prm.time_icu],
-        prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= target[c, d]*prm.availICU[c]
+        prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= 
+            target[c, d]*prm.availICU[c]
     )
 
+    # # Simple form that is based only on the upper bound and means.
     # availICU = copy(prm.availICU)
     # availICU /= prm.time_icu
-    # availICU /= prm.need_icu  
+    # availICU /= prm.need_icu 
+    # availICU *= prm.tinf
     # i = m[:i]
     # @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
     #     i[c, d] <= target[c, d]*availICU[c]
@@ -767,11 +792,13 @@ function window_control_multcities(prm, population, target, force_difference,
         test_budget
     )
     @constraint(m, max_day[d=1:prm.ndays],
-        sum(population[c]*test[c, d] for c = 1:prm.ncities) <= 20000
+        sum(population[c]*test[c, d] for c = 1:prm.ncities) <= 20000000
     )
     @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
         test[c, d] <= 1.0/cov_over_sars * i[c, d]
     )
+    turn_off = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11 , 12, 13, 14, 19, 20, 21, 22]
+    @constraint(m, [c=turn_off, d=1:prm.ndays], test[c, d] == 0.0)
         
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
@@ -781,7 +808,7 @@ function window_control_multcities(prm, population, target, force_difference,
     if verbosity >= 1
         println("Computing objective function...")
     end
-    effect_pop = population # Maybe use an alternative weight as sqrt.(population)
+    effect_pop = population # You may try to use other metrics like sqrt.(population)
     mean_population = mean(effect_pop)
     dif_matrix = Matrix{Float64}(undef, prm.ncities, prm.ndays)
     for c = 1:prm.ncities, d = 1:prm.ndays
@@ -927,5 +954,3 @@ function playground(prm, population, target, final_target, hammer_durarion)
 
     return m
 end
-
-
