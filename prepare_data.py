@@ -198,6 +198,7 @@ def convert_mobility_matrix_and_save(cities_data, max_neighbors, drs=False):
 
     # Adjust the mobility matrix
     np.fill_diagonal(mobility_matrix.values, 0.0)
+    #mobility_matrix *= 0.7
     # out vector has at entry i the proportion of the population of city i that leaves the
     # city during the day
     out = mobility_matrix.sum(axis = 1)

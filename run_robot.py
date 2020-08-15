@@ -112,10 +112,19 @@ def read_data(options, verbosity=0):
     return basic_prm, cities_data, mob_matrix, target, hammer_data
 
 
-def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif=1, verbosity=0):
+def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, 
+    force_dif=1, verbosity=0):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
+
+    # Chage ratios in matrix Mt to be in respect to the origin
+    population = cities_data["population"].values
+    Mt = mob_matrix.values[:,:-1]
+    Mt = (Mt.T).copy()
+    for c in range(ncities):
+        for k in range(ncities):
+            Mt[k, c] *= population[k]/population[c]
 
     Julia.tinc = basic_prm["tinc"]
     Julia.tinf = basic_prm["tinf"]
@@ -128,9 +137,10 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.i1 = cities_data["I1"].values
     Julia.r1 = cities_data["R1"].values
     Julia.availICU = cities_data["icu_capacity"]
-    Julia.population = cities_data["population"].values
+    Julia.population = population
     Julia.out = mob_matrix["out"].values
     Julia.M = mob_matrix.values[:, :-1]
+    Julia.Mt = Mt
     Julia.ndays = ndays
     Julia.target = target.values
     Julia.min_level = basic_prm["min_level"]
@@ -141,7 +151,7 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.window = basic_prm["window"]
     Julia.eval("""
         prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
-                                s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(M'))
+                                s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, 
                                         hammer_duration, hammer_level, min_level, verbosity);
     """)
