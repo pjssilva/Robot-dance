@@ -119,6 +119,14 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
 
+    # Chage ratios in matrix Mt to be in respect to the origin
+    population = cities_data["population"].values
+    Mt = mob_matrix.values[:,:-1]
+    Mt = (Mt.T).copy()
+    for c in range(ncities):
+        for k in range(ncities):
+            Mt[k, c] *= population[k]/population[c]
+
     Julia.tinc = basic_prm["tinc"]
     Julia.tinf = basic_prm["tinf"]
     Julia.time_icu = basic_prm["time_icu"]
@@ -130,9 +138,10 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.i1 = cities_data["I1"].values
     Julia.r1 = cities_data["R1"].values
     Julia.availICU = cities_data["icu_capacity"]
-    Julia.population = cities_data["population"].values
+    Julia.population = population
     Julia.out = mob_matrix["out"].values
     Julia.M = mob_matrix.values[:, :-1]
+    Julia.Mt = Mt
     Julia.ndays = ndays
     Julia.target = target.values
     Julia.min_level = basic_prm["min_level"]
@@ -144,7 +153,7 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.test_budget = test_budget
     Julia.eval("""
         prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
-            s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(M'))
+            s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
             hammer_level, min_level, verbosity, test_budget);
     """)
@@ -208,7 +217,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
-            target_hammer[c] = 0.75*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
+            target_hammer[c] = 0.8*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
             i_after_hammer[c] = basic_prm["time_icu"]*basic_prm["need_icu"]*max(
                 isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 
