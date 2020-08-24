@@ -423,7 +423,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     # Expressions that define "sub-states"
 
     # Parameter that determines the proportion of I that can not travel.
-    FIXED_I = 1.0
+    FIXED_I = 0.0
     CAN_TRAVEL_I = 1.0 - FIXED_I
 
     if verbosity >= 1
@@ -759,46 +759,49 @@ function window_control_multcities(prm, population, target, force_difference,
     # # becoming symptomatic.
     # TIME_TO_ICU = 7 + 2 - int(round(prm.tinf)) - 1
 
-    r = m[:r]
-    @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
-    # @expression(m, enter_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU:prm.ndays],
-    #     prm.need_icu*leave_i[d - TIME_TO_ICU])
-    # @expression(m, leave_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU + prm.time_icu:prm.ndays],
-    #     enter_icu[d - prm.time_icu])
+    # r = m[:r]
+    # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
+    # # @expression(m, enter_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU:prm.ndays],
+    # #     prm.need_icu*leave_i[d - TIME_TO_ICU])
+    # # @expression(m, leave_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU + prm.time_icu:prm.ndays],
+    # #     enter_icu[d - prm.time_icu])
 
-    # ICU capacity constraint.
-    # It says (all in expectation) that the number of patients that will enter the ICUs
-    # in the time window that is necessary for the patients to leave ICU is not
-    # larger than the number of ICUs available. 
-    @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - prm.time_icu],
-        prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= 
-            target[c, d]*prm.availICU[c]
-    )
-
-    # # Simple form that is based only on the upper bound and means.
-    # availICU = copy(prm.availICU)
-    # availICU /= prm.time_icu
-    # availICU /= prm.need_icu 
-    # availICU *= prm.tinf
-    # i = m[:i]
-    # @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
-    #     i[c, d] <= target[c, d]*availICU[c]
+    # # ICU capacity constraint.
+    # # It says (all in expectation) that the number of patients that will enter the ICUs
+    # # in the time window that is necessary for the patients to leave ICU is not
+    # # larger than the number of ICUs available. 
+    # @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - prm.time_icu],
+    #     prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= 
+    #         target[c, d]*prm.availICU[c]
     # )
+
+    # Simple form that is based only on the upper bound and means.
+    availICU = copy(prm.availICU)
+    availICU /= prm.time_icu
+    availICU /= prm.need_icu 
+    availICU *= prm.tinf
+    i = m[:i]
+    @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
+        i[c, d] <= target[c, d]*availICU[c]
+    )
 
     # Constraints on the tests
     test, i = m[:test], m[:i]
+    # Only use the given budget of tests
     @constraint(m, use_test_available,
         sum(population[c]*sum(test[c, d] for d = 1:prm.ndays) for c = 1:prm.ncities) <= 
         test_budget
     )
+    # Maximal ammount of daily test https://www.saopaulo.sp.gov.br/ultimas-noticias/sp-mira-30-mil-testes-diarios-coronavirus-com-inclusao-exames-privados/
+    max_daily = 30000000
     @constraint(m, max_day[d=1:prm.ndays],
-        sum(population[c]*test[c, d] for c = 1:prm.ncities) <= 20000000
+        sum(population[c]*test[c, d] for c = 1:prm.ncities) <= max_daily
     )
     @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
         test[c, d] <= 1.0/cov_over_sars * i[c, d]
     )
-    turn_off = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11 , 12, 13, 14, 19, 20, 21, 22]
-    @constraint(m, [c=turn_off, d=1:prm.ndays], test[c, d] == 0.0)
+    # turn_off = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11 , 12, 13, 14, 19, 20, 21, 22]
+    # @constraint(m, [c=turn_off, d=1:prm.ndays], test[c, d] == 0.0)
         
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
