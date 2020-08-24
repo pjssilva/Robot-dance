@@ -12,6 +12,7 @@ using Ipopt
 using Printf
 using LinearAlgebra
 using SparseArrays
+using Distributions
 import Statistics.mean
 
 """
@@ -731,33 +732,80 @@ function window_control_multcities(prm, population, target, force_difference,
         println("Setting limits for rt... Ok!")
     end
 
-    # Bound the maximal infection rate
+    # Bound the maximal infection rate using a chance constraint
+    # Bound the maximal infection rate taking into account the maximal ICU rooms available.
+    # Some configuration parameters got from https://covid-calc.org/
+    # Time to enter ICU after leaving I (getting into R)
+    # Acoording to https://www.nejm.org/doi/full/10.1056/nejmoa2004500 the time
+    # to ICU is 7 days after symptoms, but you have 2 days in I (citation) 
+    # before becoming symptomatic.
+    # TODO: Align comment above in the paper.
+    # TIME_TO_ICU = 7 + 2 - int(round(prm.tinf)) - 1
     if verbosity >= 1
         println("Setting limits for number of infected...")
     end
-    # Bound the maximal infection rate taking into account the maximal ICU rooms available.
-    # Some configuration parameters got from https://covid-calc.org/
-    # # Time to enter ICU after leaving I (getting into R)
-    # # Acoording to https://www.nejm.org/doi/full/10.1056/nejmoa2004500 the time
-    # # to ICU is 7 days after symptoms, but you have 2 days in I (citation) before
-    # # becoming symptomatic.
-    # TIME_TO_ICU = 7 + 2 - int(round(prm.tinf)) - 1
 
-    r = m[:r]
-    @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
-    # @expression(m, enter_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU:prm.ndays],
-    #     prm.need_icu*leave_i[d - TIME_TO_ICU])
-    # @expression(m, leave_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU + prm.time_icu:prm.ndays],
-    #     enter_icu[d - prm.time_icu])
+    # TODO: These should all be parameters - first try
+    Δ = 0.01903316 - 0.00986103
+    ϕ1 = 1.7805
+    ϕ2 = -0.7841
+    σω = sqrt(0.0009)
+    A = [ϕ1 ϕ2; 1 0]
+    p = 0.01
+    F1p = quantile(Normal(), 1.0 - p)
+
+    # We implement two variants one based on max I and another on sum on
+    # entering in R
+
+    # # Entering in R
+    # firstday = max.(2, hammer_duration .+ 1)
+    # r = m[:r]
+    # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
+    # # As in the paper, V represents the number of people that will leave
+    # # infected and potentially go to ICU.
+    # @variable(m, sqV[c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu] >= 0)
+    # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
+    #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
+    # )
+
+    # Max I
+    i = m[:i]
+    firstday = hammer_duration .+ 1
+    # As in the paper, V represents the number of people that will leave
+    # infected and potentially go to ICU.
+    @variable(m, sqV[c=1:prm.ncities, d=firstday[c]:prm.ndays - prm.time_icu] >= 0)
+    @constraint(m, [c=1:prm.ncities, d=firstday[c]:prm.ndays - prm.time_icu],
+                sqV[c, d]*sqV[c, d] == prm.time_icu/prm.tinf * i[c, d]
+    )
 
     # ICU capacity constraint.
     # It says (all in expectation) that the number of patients that will enter the ICUs
     # in the time window that is necessary for the patients to leave ICU is not
     # larger than the number of ICUs available. 
-    @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - prm.time_icu],
-        prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= 
-            target[c, d]*prm.availICU[c]
-    )
+    # @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - prm.time_icu],
+    #     prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= 
+    #         target[c, d]*prm.availICU[c]
+    # )
+
+    # Now create the capacity constraint for each day
+    Ad, Adm1 = similar(A), similar(A)
+    for c in 1:prm.ncities
+        Ad .= [1.0 0.0; 0.0 1.0]
+        summation = 1.0
+        Eicu = 
+        for d in firstday[c]:prm.ndays - prm.time_icu
+            @constraint(m, 
+                prm.need_icu*sqV[c, d]*sqV[c, d] + 
+                F1p*σω*sqrt(Δ*summation)*sqV[c, d]/sqrt(population[c]) 
+                <= target[c, d]*prm.availICU[c]
+            )
+            println(F1p*σω*sqrt(Δ*summation))
+            Adm1 .= Ad
+            mul!(Ad, A, Adm1)
+            summation += Ad[1, 1] + Ad[1, 2]
+        end
+        println()
+    end
 
     # # Simple form that is based only on the upper bound and means.
     # availICU = copy(prm.availICU)
