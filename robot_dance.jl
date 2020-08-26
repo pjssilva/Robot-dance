@@ -746,12 +746,27 @@ function window_control_multcities(prm, population, target, force_difference,
     end
 
     # TODO: These should all be parameters - first try
-    Δ = 0.01903316 - 0.00986103
-    ϕ1 = 1.7805
-    ϕ2 = -0.7841
-    σω = sqrt(0.0009)
-    A = [ϕ1 ϕ2; 1 0]
-    p = 0.01
+    
+    if prm.time_icu == 11
+        ρmin, ρmax = 0.00379873, 0.02360889
+        ϕ0 = 0.003055220184503005
+        ϕ1 = 1.346540496346441 
+        ϕ2 = -0.35212183634836325
+        σω = 0.0011820962652620602
+        A = [ϕ1 ϕ2; 1 0]
+        icu0 = 0.00379872899804252
+        icum1 = icu0
+    elseif prm.time_icu == 7
+        ρmin, ρmax = 0.00693521, 0.02830658
+        ϕ0 = 0.0030201845812784043
+        ϕ1 = 0.9945816723468636
+        ϕ2 = 0.0 # To avoid error.
+        σω = 0.0016102760532102568
+        icu0 = 0.00693521103887298
+        icum1 = icu0
+    end
+    Δ = ρmax - ρmin
+    p = 0.05
     F1p = quantile(Normal(), 1.0 - p)
 
     # We implement two variants one based on max I and another on sum on
@@ -778,31 +793,34 @@ function window_control_multcities(prm, population, target, force_difference,
                 sqV[c, d]*sqV[c, d] == prm.time_icu/prm.tinf * i[c, d]
     )
 
-    # ICU capacity constraint.
-    # It says (all in expectation) that the number of patients that will enter the ICUs
-    # in the time window that is necessary for the patients to leave ICU is not
-    # larger than the number of ICUs available. 
-    # @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - prm.time_icu],
-    #     prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= 
-    #         target[c, d]*prm.availICU[c]
-    # )
-
     # Now create the capacity constraint for each day
-    Ad, Adm1 = similar(A), similar(A)
     for c in 1:prm.ncities
-        Ad .= [1.0 0.0; 0.0 1.0]
-        summation = 1.0
-        Eicu = 
-        for d in firstday[c]:prm.ndays - prm.time_icu
-            @constraint(m, 
-                prm.need_icu*sqV[c, d]*sqV[c, d] + 
-                F1p*σω*sqrt(Δ*summation)*sqV[c, d]/sqrt(population[c]) 
-                <= target[c, d]*prm.availICU[c]
-            )
-            println(F1p*σω*sqrt(Δ*summation))
-            Adm1 .= Ad
-            mul!(Ad, A, Adm1)
-            summation += Ad[1, 1] + Ad[1, 2]
+        Ad = [ϕ1 ϕ2; 1 0]
+        ϕ1d = ϕ1
+        sumΘ = 1.0
+        for d in 1:prm.ndays - prm.time_icu
+            if prm.time_icu == 7
+                Eicu = (1 - ϕ1d)*ρmin + Δ*sumΘ*ϕ0 + ϕ1d*icu0
+            elseif prm.time_icu == 11
+                Eicu = (1 - Ad[1, 1] - Ad[1, 2])*ρmin + Δ*sumΘ*ϕ0 + 
+                       Ad[1, 1]*icu0 + Ad[1, 2]*icum1
+            end
+            if d >= firstday[c]
+                @constraint(m, 
+                    Eicu*sqV[c, d]*sqV[c, d] + 
+                    F1p*σω*sqrt(Δ*sumΘ)*sqV[c, d]/sqrt(population[c]) 
+                    <= target[c, d]*prm.availICU[c]
+                )
+            end
+            print(Eicu, " ")
+            println(F1p*σω*sqrt(Δ*sumΘ))
+            if prm.time_icu == 7
+                sumΘ += ϕ1d
+                ϕ1d = ϕ1 * ϕ1d
+            elseif prm.time_icu == 11
+                sumΘ += Ad[1, 1]
+                Ad = A * Ad
+            end
         end
         println()
     end
