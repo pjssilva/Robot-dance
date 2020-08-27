@@ -403,7 +403,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     # Obs. I tried many variations, only adding the variable below worded the best.
     #      I tried to get rid of all SEIR variables and use only the initial conditions.
     #      Add variables for sp, ep, ip, rp. Add a variable to represent s times i.
-    # @variable(m, p_eff_p_c[1:prm.ncities, 1:prm.ndays])
+    @variable(m, p_eff_p_c[1:prm.ncities, 1:prm.ndays])
     @variable(m, i_eff_p_c[1:prm.ncities, 1:prm.ndays])
     @variable(m, i_eff[1:prm.ncities, t=1:prm.ndays])
     @variable(m, rti_eff[1:prm.ncities, t=1:prm.ndays])
@@ -430,17 +430,28 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
         @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays], 1.0)
     end
 
+    @expression(m, alt_out[c=1:prm.ncities, d=1:prm.window:prm.ndays],
+        sum(rt[k, d]/prm.rep*prm.Mt[k, c] for k in coli_Mt[c])
+    )
+    @expression(m, dest_orig[c=1:prm.ncities, k in coli_M[c], d=1:prm.window:prm.ndays],
+        rt[c, d]/prm.rep*prm.M[k, c]
+    )
+    @expression(m, orig_dest[c=1:prm.ncities, k in coli_Mt[c], d=1:prm.window:prm.ndays],
+        rt[k, d]/prm.rep*prm.Mt[k, c]
+    )
+
     # p_eff_p_c denotes the proportion of the effective population at city c
     # during the day divided by the original population of city c
-    @expression(m, p_eff_p_c[c=1:prm.ncities, t=1:prm.ndays],
-        1.0 - prm.out[c]*can_travel[c, t] + 
-            sum(prm.M[k, c]*can_travel[k, t] for k in coli_M[c])
+
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        p_eff_p_c[c, t] == 1.0 - alt_out[c, mapind(t, prm)]*can_travel[c, t] + 
+            sum(dest_orig[c, k, mapind(t, prm)]*can_travel[k, t] for k in coli_M[c])
     )
     # i_eff_p_c denotes the proportion of the effective number of infected at city c
     # during the day divided by the original population of city c
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        i_eff_p_c[c, t] == (1.0 - prm.out[c]*CAN_TRAVEL_I)*i[c, t] +
-            sum(prm.M[k, c]*CAN_TRAVEL_I*i[k, t] for k in coli_M[c])
+        i_eff_p_c[c, t] == (1.0 - alt_out[c, mapind(t, prm)]*CAN_TRAVEL_I)*i[c, t] +
+            sum(dest_orig[c, k, mapind(t, prm)]*CAN_TRAVEL_I*i[k, t] for k in coli_M[c])
     )
     # i_eff is the effective ratio of inffected in city c
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays], 
@@ -467,11 +478,19 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     if verbosity >= 1
         println("Defining SEIR equations...")
     end
+    @variable(m, one_minus_out_s[c=1:prm.ncities, t=1:prm.ndays])
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        one_minus_out_s[c, t] == (1.0 - alt_out[c, mapind(t, prm)])*s[c, t]
+    )
+    @variable(m, orig_dest_s[c=1:prm.ncities, k in coli_Mt[c], t=1:prm.ndays])
+    @constraint(m, [c=1:prm.ncities, k in coli_Mt[c], t=1:prm.ndays],
+        orig_dest_s[c, k, t] == orig_dest[c, k, mapind(t, prm)]*s[c, t]
+    )
     @expression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
         -1.0/prm.tinf*(
-        α*( (1.0 - prm.out[c])*s[c, t]*rti_eff[c, t] +
-            sum(prm.Mt[k, c]*s[c, t]*rti_eff[k, t] for k = coli_Mt[c]) ) +
-        (1 - α)*s[c, t]*rti[c, t]
+        α*( one_minus_out_s[c,t]*rti_eff[c, t] +
+            sum(orig_dest_s[c, k, t]*rti_eff[k, t] for k = coli_Mt[c]) ) 
+        + (1 - α)*s[c, t]*rti[c, t]
        )
     )
     @expression(m, de[c=1:prm.ncities, t=1:prm.ndays],

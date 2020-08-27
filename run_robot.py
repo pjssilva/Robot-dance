@@ -18,8 +18,56 @@ from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
 print('Loading modules... Ok!')
 
-
 import prepare_data
+
+class SimpleTimeSeries:
+    """Simple time series of one or two steps.
+    """
+    def __init__(self, tau):
+        # TODO: Of course this should not be hard coded...
+        if tau == 7:
+            p = 1
+            rhomin, rhomax = 0.00693521, 0.02830658
+            phi0 = 0.0030201845812784043
+            phi1 = 0.9945816723468636
+            phi2 = None
+            sigmaw = 0.0016102760532102568
+            initial = 0.00693521103887298
+        elif tau == 11:
+            p = 2
+            rhomin, rhomax = 0.00379873, 0.02360889
+            phi0 = 0.003055220184503005
+            phi1 = 1.346540496346441 
+            phi2 = -0.35212183634836325
+            sigmaw = 0.0011820962652620602
+            initial = 0.00379872899804252
+        else:
+            raise NotImplementedError("Time series not implemented")
+    
+        self.p = p
+        self.rhomin = rhomin
+        self.whomax = rhomax
+        self.phi0 = phi0
+        self.phi1 = phi1
+        self.phi2 = phi2
+        self.sigmaw = sigmaw
+        self.delta = rhomax - rhomin
+        rho0 = (initial - rhomin) / self.delta
+        if p == 2:
+            self.A = np.array([[phi1, phi2], [1, 0]])
+            self.state = np.array([rho0, rho0])
+        else:
+            self.A = None
+            self.state = rho0
+    
+    def iterate(self):
+        if self.p == 1:
+            self.state = self.phi0 + self.phi1*self.state
+            return self.rhomin + self.delta*self.state
+        else:
+            self.state = np.array([self.phi0, 0]) + self.A @ self.state
+            return self.rhomin + self.delta*self.state[0]
+
 
 # To use PyJulia
 print('Loading Julia library...')
@@ -171,6 +219,10 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
     """Find hammer durations for each city such that the optimization problem will 
     (hopefully) be feasible
     """
+
+    time_series = SimpleTimeSeries(basic_prm["time_icu"])
+    need_icu = [time_series.iterate() for i in range(int(basic_prm["ndays"]))]
+
     if verbosity >= 1:
         print('Checking if initial hammer is long enough...')
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
@@ -215,7 +267,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
             target_hammer[c] = 0.8*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
-            i_after_hammer[c] = basic_prm["time_icu"]*basic_prm["need_icu"]*max(
+            i_after_hammer[c] = basic_prm["time_icu"]*need_icu[hammer_duration[c]]*max(
                 isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 
         feas_model = True
