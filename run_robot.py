@@ -19,8 +19,56 @@ from pylab import rcParams
 rcParams['figure.figsize'] = 14, 7
 print('Loading modules... Ok!')
 
-
 import prepare_data
+
+class SimpleTimeSeries:
+    """Simple time series of one or two steps.
+    """
+    def __init__(self, tau):
+        # TODO: Of course this should not be hard coded...
+        if tau == 7:
+            p = 1
+            rhomin, rhomax = 0.00693521, 0.02830658
+            phi0 = 0.0030201845812784043
+            phi1 = 0.9945816723468636
+            phi2 = None
+            sigmaw = 0.0016102760532102568
+            initial = 0.00693521103887298
+        elif tau == 11:
+            p = 2
+            rhomin, rhomax = 0.00379873, 0.02360889
+            phi0 = 0.003055220184503005
+            phi1 = 1.346540496346441 
+            phi2 = -0.35212183634836325
+            sigmaw = 0.0011820962652620602
+            initial = 0.00379872899804252
+        else:
+            raise NotImplementedError("Time series not implemented")
+    
+        self.p = p
+        self.rhomin = rhomin
+        self.whomax = rhomax
+        self.phi0 = phi0
+        self.phi1 = phi1
+        self.phi2 = phi2
+        self.sigmaw = sigmaw
+        self.delta = rhomax - rhomin
+        rho0 = (initial - rhomin) / self.delta
+        if p == 2:
+            self.A = np.array([[phi1, phi2], [1, 0]])
+            self.state = np.array([rho0, rho0])
+        else:
+            self.A = None
+            self.state = rho0
+    
+    def iterate(self):
+        if self.p == 1:
+            self.state = self.phi0 + self.phi1*self.state
+            return self.rhomin + self.delta*self.state
+        else:
+            self.state = np.array([self.phi0, 0]) + self.A @ self.state
+            return self.rhomin + self.delta*self.state[0]
+
 
 # To use PyJulia
 print('Loading Julia library...')
@@ -153,7 +201,7 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.test_budget = test_budget
     Julia.eval("""
         prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
-            s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(Mt))
+                              s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
             hammer_level, min_level, verbosity, test_budget);
     """)
@@ -168,9 +216,15 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
         """)
 
 
-def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=False, save_file=False, verbosity=0):
-    """Find hammer durations for each city such that the optimization problem will (hopefully) be feasible
+def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, 
+    out_file=None, incr_all=False, verbosity=0):
+    """Find hammer durations for each city such that the optimization problem will 
+    (hopefully) be feasible
     """
+
+    time_series = SimpleTimeSeries(basic_prm["time_icu"])
+    need_icu = [time_series.iterate() for i in range(int(basic_prm["ndays"]))]
+
     if verbosity >= 1:
         print('Checking if initial hammer is long enough...')
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
@@ -196,14 +250,11 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
     t_total1 = timer()
     while feas_model == False:
         t_solve1 = timer()
-        sol = solve_ivp(_robot_dance_hammer, tspan, y0, t_eval=teval, args=(basic_prm["tinc"], \
-                                                                        basic_prm["tinf"], \
-                                                                        ncities, \
-                                                                        M, \
-                                                                        out, \
-                                                                        min_rt, \
-                                                                        hammer_level, \
-                                                                        hammer_duration))
+        sol = solve_ivp(_robot_dance_hammer, tspan, y0, t_eval=teval, args=(
+                basic_prm["tinc"], basic_prm["tinf"], ncities, M, out, min_rt, 
+                hammer_level, hammer_duration
+            )
+        )
         t_solve2 = timer()
         if verbosity >= 2:
             print(f'Time to simulate: {t_solve2-t_solve1:.2g}')
@@ -211,14 +262,14 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         tsim = sol.t
         isim = sol.y[2*ncities:3*ncities]
 
-        # Get the max number of infected after hammer
-        # (usually it's the number of infected immediately after hammer, but this might not work if hammer_duration = 0)
-        # (so let's use a safer implementation)
+        # Get the max number of infected after hammer (usually it's the number
+        # of infected immediately after hammer, but this might not work if
+        # hammer_duration = 0) (so let's use a safer implementation)
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
             target_hammer[c] = 0.8*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
-            i_after_hammer[c] = basic_prm["time_icu"]*basic_prm["need_icu"]*max(
+            i_after_hammer[c] = basic_prm["time_icu"]*need_icu[hammer_duration[c]]*max(
                 isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 
         feas_model = True
@@ -229,7 +280,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
                 feas_model = False
             else:
                 if verbosity >= 2:
-                    print(f'{cities_data.index[c]} is fine after {hammer_duration[c]} days of hammer (infected = {i_after_hammer[c]:.2g}, target = {target_hammer[c]})')
+                    print(f'{cities_data.index[c]} is fine after {hammer_duration[c]} days of hammer (infected = {i_after_hammer[c]:.2e}, target = {target_hammer[c]:.2e})')
 
         if feas_model == False:
             # There is at least one city violating the target after hammer
@@ -255,20 +306,18 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         iter += 1
 
     t_total2 = timer()
-    if verbosity >= 2:
+    if verbosity >= 1:
         print('')
         print(f'Number of iterations: {iter}')
         print(f'Total time: {t_total2-t_total1} s')
-        print('Hammer duration')
-        for c in range(ncities):
-            print(f'{cities_data.index[c]}: {hammer_duration[c]} days')
+        print()
+        print("Hammer data")
+        print(hammer_data)
 
-    if save_file == True:
+    if out_file is not None:
         if verbosity >= 1:
             print('Saving hammer data file')
-        # TODO: Since this funciton is to be called from a program and not only from the 
-        # command line it does not make sense to have option.???? here. 
-        hammer_data.to_csv(options.hammer_data)
+        hammer_data.to_csv(out_file)
 
     if verbosity >= 1:
         print('Checking if initial hammer is long enough... Ok!')
@@ -464,7 +513,7 @@ def save_result(cities_names, filename):
         df.append([c, "e"] + list(Julia.e[i, :])) 
         df.append([c, "i"] + list(Julia.i[i, :])) 
         df.append([c, "r"] + list(Julia.r[i, :])) 
-        df.append([c, "rt"] + list(Julia.rt[i, :]))
+        df.append([c, "rt"] + list(Julia.rt[i, :])) 
         df.append([c, "test"] + list(Julia.test[i, :]))
     df = pd.DataFrame(df, columns=["City", "Variable"] + list(range(len(Julia.s[0,:]))))
     df.set_index(["City", "Variable"], inplace=True)
@@ -472,13 +521,13 @@ def save_result(cities_names, filename):
     return df
 
 
-def optimize_and_show_results(basic_prm, figure_file, data_file, cities, 
-    start_date=None, verbosity=0):
+def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, verbosity=0):
     """Optimize and save figures and data for further processing.
     """
-    cities_names = cities.index
-    population = cities["population"].values
 
+    large_cities = cities_data.index
+    population = cities_data["population"].values 
+    
     if verbosity >= 1:
         print('Solving Robot-dance...')
 
@@ -494,58 +543,57 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, cities,
         print("Total tests used ", end="")
         print((Julia.test.T*population).sum())
 
+    bins = [0]
+    bins.extend(plt.linspace(1.0, 0.95*basic_prm["rep"], 5))
+    bins.append(basic_prm["rep"])
+
+    stats = pd.DataFrame(index=large_cities)
+    changes_rt = []
+    for (i, c) in enumerate(large_cities):
+        changes_rt.append(len(np.diff(Julia.rt[i]).nonzero()[0]) + 1)
+    stats["Rt changes"] = changes_rt
+
+    i_avg, max_i = [], []
+    for (i, c) in enumerate(large_cities):
+        maximum = 100*Julia.i[i, Julia.hammer_duration[i]:].max()
+        average = 100*sum(Julia.i[i])/len(Julia.i[i])
+        max_i.append(f"{maximum:.3f}%")
+        i_avg.append(f"{average:.3f}%")
+    stats["Avg. I"] = i_avg
+    stats["Max I"] = max_i
+        
+    total, mean = [], []
+    for (i,c) in enumerate(large_cities):
+        rt = Julia.rt[i]
+        inds = np.nonzero(rt >= bins[-2])[0]
+        count_open_total = len(inds)
+        thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
+        thresh_open = np.insert(thresh_open, 0, 0)
+        thresh_open = np.append(thresh_open, len(inds))
+        count_open = np.diff(thresh_open)
+        total.append(count_open_total)
+        mean.append(np.mean(count_open))
+    stats["Open"] = total
+    stats["Mean open"] = mean
+
+    total, mean = [], []
+    for (i,c) in enumerate(large_cities):
+        rt = Julia.rt[i]
+        inds = np.nonzero(rt < bins[2])[0]
+        count_open_total = len(inds)
+        thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
+        thresh_open = np.insert(thresh_open, 0, 0)
+        thresh_open = np.append(thresh_open, len(inds))
+        count_open = np.diff(thresh_open)
+        total.append(count_open_total)
+        mean.append(np.mean(count_open))
+    stats["Closed"] = total
+    stats["Mean closed"] = mean
+
     if verbosity >= 1:
-        print('')
-        print('-----')
-        print('Number of rt changes in each city')
-        for (i, c) in enumerate(cities_names):
-            changes_rt = len(np.diff(Julia.rt[i]).nonzero()[0]) + 1
-            print(f'{c}: {changes_rt}')
-        print('-----')
-
-        print('')
-        print('-----')
-        print('Average fraction of infected')
-        for (i, c) in enumerate(cities_names):
-            i_avg = sum(Julia.i[i])/len(Julia.i[i])
-            print(f'{c}: {i_avg}')
-        print('-----')
-            
-        print('')
-        print('-----')
-        print('Number of days open (rt = 2.5)')
-        for (i,c) in enumerate(cities_names):
-            rt = Julia.rt[i]
-            inds = np.nonzero(rt >= 2.4)[0]
-            count_open_total = len(inds)
-            thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
-            thresh_open = np.insert(thresh_open, 0, 0)
-            thresh_open = np.append(thresh_open, len(inds))
-            count_open = np.diff(thresh_open)
-            print(f'{c}: {count_open_total} days total')
-            for (i,n) in enumerate(count_open):
-                print(f'Opening {i+1}: {n} days')
-            print(f'Average: {np.mean(count_open):.0f} days')
-            print('')
-        print('-----')
-
-        print('')
-        print('-----')
-        print('Number of days in lockdown (rt <= 1.1)')
-        for (i,c) in enumerate(cities_names):
-            rt = Julia.rt[i]
-            inds = np.nonzero(rt <= 1.1)[0]
-            count_open_total = len(inds)
-            thresh_open = np.nonzero(np.diff(inds) > 1)[0] + 1
-            thresh_open = np.insert(thresh_open, 0, 0)
-            thresh_open = np.append(thresh_open, len(inds))
-            count_open = np.diff(thresh_open)
-            print(f'{c}: {count_open_total} days total')
-            for (i,n) in enumerate(count_open):
-                print(f'Lockdown {i+1}: {n} days')
-            print(f'Average: {np.mean(count_open):.0f} days')
-            print('')
-        print('-----')
+        print()
+        print("Statistics")
+        print(stats)
 
     # Before saving anything, check if directory exists
     # Lets assume all output files are in the same directory
@@ -556,7 +604,7 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, cities,
     if verbosity >= 1:
         print('Saving output files...')
     
-    result = save_result(cities_names, data_file)
+    result = save_result(large_cities, data_file)
     
     if verbosity >= 1:
         print('Saving output files... Ok!')
@@ -567,15 +615,17 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, cities,
     name, extension = os.path.splitext(figure_file)
 
     figure_file =  name + "-rt" + extension
-    plot_result(basic_prm, result, figure_file, start_date, type="rt")
+    plot_result(basic_prm, result, figure_file, cities_data["start_date"][0], type="rt")
     plt.savefig(figure_file, dpi=150)
 
     figure_file =  name + "-test" + extension
-    plot_result(basic_prm, result, figure_file, start_date, type="test")
+    plot_result(basic_prm, result, figure_file, cities_data["start_date"][0], type="test")
     plt.savefig(figure_file, dpi=150)
 
     if verbosity >= 1:
         print("Ploting result... OK!")
+
+    return stats
 
 
 def plot_result(basic_prm, result, figure_file, start_date=None, type="test"):
@@ -712,14 +762,17 @@ def plot_result(basic_prm, result, figure_file, start_date=None, type="test"):
 def main():
     """Allow call from the command line.
     """
-    verbosity = 1   # 0: print nothing, 1: print min info, 2: more detailed, including solver progress
+    verbosity = 1 # 0: print nothing, 1: print min info (with solver progress), 
+                  # 2: even more detailed
     dir_output = "results"
     options = get_options()
     basic_prm, cities_data, mob_matrix, target, hammer_data = read_data(options)
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     force_dif = np.ones((ncities, ndays))
-    find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, options, incr_all=True, save_file=False, verbosity=verbosity)
-    prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif, verbosity=verbosity)
+    find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, 
+        out_file=options.hammer_data, incr_all=True, verbosity=verbosity)
+    prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif, 
+        verbosity=verbosity)
     optimize_and_show_results(basic_prm, f"{dir_output}/cmd_res.png", 
         f"{dir_output}/cmd_res.csv", cities_data.index, verbosity=verbosity)
     # check_error_optim(basic_prm, cities_data, mob_matrix, dir_output)

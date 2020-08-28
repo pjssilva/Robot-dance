@@ -12,6 +12,7 @@ using Ipopt
 using Printf
 using LinearAlgebra
 using SparseArrays
+using Distributions
 import Statistics.mean
 
 """
@@ -396,6 +397,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     @variable(m, 0.0 <= test[1:prm.ncities, 1:prm.ndays] <= 1.0)
 
     # Constants that define the testing impact
+    # TODO: These values should be paramters
     tau = 5
     cov_over_sars = 0.25
     test_const = 0.2*cov_over_sars * exp(-tau / (tau + prm.tinf))
@@ -411,7 +413,7 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     # Obs. I tried many variations, only adding the variable below worded the best.
     #      I tried to get rid of all SEIR variables and use only the initial conditions.
     #      Add variables for sp, ep, ip, rp. Add a variable to represent s times i.
-    # @variable(m, p_eff_p_c[1:prm.ncities, 1:prm.ndays])
+    @variable(m, p_eff_p_c[1:prm.ncities, 1:prm.ndays])
     @variable(m, i_eff_p_c[1:prm.ncities, 1:prm.ndays])
     @variable(m, i_eff[1:prm.ncities, t=1:prm.ndays])
     @variable(m, rti_eff[1:prm.ncities, t=1:prm.ndays])
@@ -438,17 +440,28 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
         @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays], 1.0)
     end
 
+    @expression(m, alt_out[c=1:prm.ncities, d=1:prm.window:prm.ndays],
+        sum(rt[k, d]/prm.rep*prm.Mt[k, c] for k in coli_Mt[c])
+    )
+    @expression(m, dest_orig[c=1:prm.ncities, k in coli_M[c], d=1:prm.window:prm.ndays],
+        rt[c, d]/prm.rep*prm.M[k, c]
+    )
+    @expression(m, orig_dest[c=1:prm.ncities, k in coli_Mt[c], d=1:prm.window:prm.ndays],
+        rt[k, d]/prm.rep*prm.Mt[k, c]
+    )
+
     # p_eff_p_c denotes the proportion of the effective population at city c
     # during the day divided by the original population of city c
-    @expression(m, p_eff_p_c[c=1:prm.ncities, t=1:prm.ndays],
-        1.0 - prm.out[c]*can_travel[c, t] + 
-            sum(prm.M[k, c]*can_travel[k, t] for k in coli_M[c])
+
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        p_eff_p_c[c, t] == 1.0 - alt_out[c, mapind(t, prm)]*can_travel[c, t] + 
+            sum(dest_orig[c, k, mapind(t, prm)]*can_travel[k, t] for k in coli_M[c])
     )
     # i_eff_p_c denotes the proportion of the effective number of infected at city c
     # during the day divided by the original population of city c
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        i_eff_p_c[c, t] == (1.0 - prm.out[c]*CAN_TRAVEL_I)*itest[c, t] +
-            sum(prm.M[k, c]*CAN_TRAVEL_I*itest[k, t] for k in coli_M[c])
+        i_eff_p_c[c, t] == (1.0 - alt_out[c, mapind(t, prm)]*CAN_TRAVEL_I)*itest[c, t] +
+            sum(dest_orig[c, k, mapind(t, prm)]*CAN_TRAVEL_I*itest[k, t] for k in coli_M[c])
     )
     # i_eff is the effective ratio of inffected in city c
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays], 
@@ -475,11 +488,19 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
     if verbosity >= 1
         println("Defining SEIR equations...")
     end
+    @variable(m, one_minus_out_s[c=1:prm.ncities, t=1:prm.ndays])
+    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
+        one_minus_out_s[c, t] == (1.0 - alt_out[c, mapind(t, prm)])*s[c, t]
+    )
+    @variable(m, orig_dest_s[c=1:prm.ncities, k in coli_Mt[c], t=1:prm.ndays])
+    @constraint(m, [c=1:prm.ncities, k in coli_Mt[c], t=1:prm.ndays],
+        orig_dest_s[c, k, t] == orig_dest[c, k, mapind(t, prm)]*s[c, t]
+    )
     @expression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
         -1.0/prm.tinf*(
-        α*( (1.0 - prm.out[c])*s[c, t]*rti_eff[c, t] +
-            sum(prm.Mt[k, c]*s[c, t]*rti_eff[k, t] for k = coli_Mt[c]) ) +
-        (1 - α)*s[c, t]*rti[c, t]
+        α*( one_minus_out_s[c,t]*rti_eff[c, t] +
+            sum(orig_dest_s[c, k, t]*rti_eff[k, t] for k = coli_Mt[c]) ) 
+        + (1 - α)*s[c, t]*rti[c, t]
        )
     )
     @expression(m, de[c=1:prm.ncities, t=1:prm.ndays],
@@ -747,43 +768,108 @@ function window_control_multcities(prm, population, target, force_difference,
         println("Setting limits for rt... Ok!")
     end
 
-    # Bound the maximal infection rate
+    # Bound the maximal infection rate using a chance constraint
+    # Bound the maximal infection rate taking into account the maximal ICU rooms available.
+    # Some configuration parameters got from https://covid-calc.org/
+    # Time to enter ICU after leaving I (getting into R)
+    # Acoording to https://www.nejm.org/doi/full/10.1056/nejmoa2004500 the time
+    # to ICU is 7 days after symptoms, but you have 2 days in I (citation) 
+    # before becoming symptomatic.
+    # TODO: Align comment above in the paper.
+    # TIME_TO_ICU = 7 + 2 - int(round(prm.tinf)) - 1
     if verbosity >= 1
         println("Setting limits for number of infected...")
     end
-    # Bound the maximal infection rate taking into account the maximal ICU rooms available.
-    # Some configuration parameters got from https://covid-calc.org/
-    # # Time to enter ICU after leaving I (getting into R)
-    # # Acoording to https://www.nejm.org/doi/full/10.1056/nejmoa2004500 the time
-    # # to ICU is 7 days after symptoms, but you have 2 days in I (citation) before
-    # # becoming symptomatic.
-    # TIME_TO_ICU = 7 + 2 - int(round(prm.tinf)) - 1
 
+    # TODO: These should all be parameters - first try
+    
+    if prm.time_icu == 11
+        ρmin, ρmax = 0.00379873, 0.02360889
+        ϕ0 = 0.003055220184503005
+        ϕ1 = 1.346540496346441 
+        ϕ2 = -0.35212183634836325
+        σω = 0.0011820962652620602
+        A = [ϕ1 ϕ2; 1 0]
+        icu0 = 0.00379872899804252
+        icum1 = icu0
+    elseif prm.time_icu == 7
+        ρmin, ρmax = 0.00693521, 0.02830658
+        ϕ0 = 0.0030201845812784043
+        ϕ1 = 0.9945816723468636
+        ϕ2 = 0.0 # To avoid error.
+        σω = 0.0016102760532102568
+        icu0 = 0.00693521103887298
+        icum1 = icu0
+    end
+    Δ = ρmax - ρmin
+    p = 0.05
+    F1p = quantile(Normal(), 1.0 - p)
+
+    # We implement two variants one based on max I and another on sum on
+    # entering in R
+
+    # # Entering in R
+    # firstday = max.(2, hammer_duration .+ 1)
     # r = m[:r]
     # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
-    # # @expression(m, enter_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU:prm.ndays],
-    # #     prm.need_icu*leave_i[d - TIME_TO_ICU])
-    # # @expression(m, leave_icu[c=1:prm.ncities, d=2 + TIME_TO_ICU + prm.time_icu:prm.ndays],
-    # #     enter_icu[d - prm.time_icu])
-
-    # # ICU capacity constraint.
-    # # It says (all in expectation) that the number of patients that will enter the ICUs
-    # # in the time window that is necessary for the patients to leave ICU is not
-    # # larger than the number of ICUs available. 
-    # @constraint(m, [c=1:prm.ncities, d=max(2, hammer_duration[c] + 1):prm.ndays - prm.time_icu],
-    #     prm.need_icu*sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1) <= 
-    #         target[c, d]*prm.availICU[c]
+    # # As in the paper, V represents the number of people that will leave
+    # # infected and potentially go to ICU.
+    # @variable(m, sqV[c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu] >= 0)
+    # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
+    #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
     # )
 
-    # Simple form that is based only on the upper bound and means.
-    availICU = copy(prm.availICU)
-    availICU /= prm.time_icu
-    availICU /= prm.need_icu 
-    availICU *= prm.tinf
+    # Max I
     i = m[:i]
-    @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
-        i[c, d] <= target[c, d]*availICU[c]
+    firstday = hammer_duration .+ 1
+    # As in the paper, V represents the number of people that will leave
+    # infected and potentially go to ICU.
+    @variable(m, sqV[c=1:prm.ncities, d=firstday[c]:prm.ndays - prm.time_icu] >= 0)
+    @constraint(m, [c=1:prm.ncities, d=firstday[c]:prm.ndays - prm.time_icu],
+                sqV[c, d]*sqV[c, d] == prm.time_icu/prm.tinf * i[c, d]
     )
+
+    # Now create the capacity constraint for each day
+    for c in 1:prm.ncities
+        Ad = [ϕ1 ϕ2; 1 0]
+        ϕ1d = ϕ1
+        sumΘ = 1.0
+        for d in 1:prm.ndays - prm.time_icu
+            if prm.time_icu == 7
+                Eicu = (1 - ϕ1d)*ρmin + Δ*sumΘ*ϕ0 + ϕ1d*icu0
+            elseif prm.time_icu == 11
+                Eicu = (1 - Ad[1, 1] - Ad[1, 2])*ρmin + Δ*sumΘ*ϕ0 + 
+                       Ad[1, 1]*icu0 + Ad[1, 2]*icum1
+            end
+            if d >= firstday[c]
+                @constraint(m, 
+                    Eicu*sqV[c, d]*sqV[c, d] + 
+                    F1p*σω*sqrt(Δ*sumΘ)*sqV[c, d]/sqrt(population[c]) 
+                    <= target[c, d]*prm.availICU[c]
+                )
+            end
+            print(Eicu, " ")
+            println(F1p*σω*sqrt(Δ*sumΘ))
+            if prm.time_icu == 7
+                sumΘ += ϕ1d
+                ϕ1d = ϕ1 * ϕ1d
+            elseif prm.time_icu == 11
+                sumΘ += Ad[1, 1]
+                Ad = A * Ad
+            end
+        end
+        println()
+    end
+
+    # # Simple form that is based only on the upper bound and means.
+    # availICU = copy(prm.availICU)
+    # availICU /= prm.time_icu
+    # availICU /= prm.need_icu 
+    # availICU *= prm.tinf
+    # i = m[:i]
+    # @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
+    #     i[c, d] <= target[c, d]*availICU[c]
+    # )
 
     # Constraints on the tests
     test, i = m[:test], m[:i]
@@ -793,16 +879,16 @@ function window_control_multcities(prm, population, target, force_difference,
         test_budget
     )
     # Maximal ammount of daily test https://www.saopaulo.sp.gov.br/ultimas-noticias/sp-mira-30-mil-testes-diarios-coronavirus-com-inclusao-exames-privados/
-    max_daily = 30000000
+    max_daily = 50000000
     @constraint(m, max_day[d=1:prm.ndays],
         sum(population[c]*test[c, d] for c = 1:prm.ncities) <= max_daily
     )
     @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
         test[c, d] <= 1.0/cov_over_sars * i[c, d]
     )
-    # turn_off = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11 , 12, 13, 14, 19, 20, 21, 22]
+    # turn_off = [1, 2, 3, 6, 8, 10, 13, 15, 16, 17, 18, 20, 21, 22]
     # @constraint(m, [c=turn_off, d=1:prm.ndays], test[c, d] == 0.0)
-        
+    
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
     end

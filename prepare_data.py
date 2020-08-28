@@ -13,7 +13,6 @@ print('Loading PyJulia module...')
 from julia.api import Julia
 jl = Julia(compiled_modules=False)
 from julia import Main as Julia
-Julia.eval('ENV["OMP_NUM_THREADS"] = 8')
 print('Loading PyJulia module... Ok!')
 print('Loading Robot-dance Julia module...')
 Julia.eval('include("robot_dance.jl")')
@@ -136,8 +135,10 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
             icu_capacity.append(city_data["icu_capacity"].iloc[0])
             if verbose > 0:
                 S = parameters[city_name][0]
-                print(f"{i + 1}/{n_cities} {city_name:<30s} ", end = "")
+                print(f"{(i + 1):2d}/{n_cities} {city_name:<30s} ", end = "")
                 print(f"Mean effective R in the last two weeks = {S*np.mean(rt[-14:]):.2f}")
+            else:
+                print()
         except ValueError:
             print("Ignoring ", city_name, "not enough data.")
             ignored.append(city_name)    
@@ -156,6 +157,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
         orient="index", columns=["S1", "E1", "I1", "R1"])
     cities_data["population"] = population
     cities_data["icu_capacity"] = icu_capacity
+    cities_data["start_date"] = epi_data["date"].max()
     cities_data.to_csv(path.join("data", "cities_data.csv"))
     return cities_data
 
@@ -196,6 +198,7 @@ def convert_mobility_matrix_and_save(cities_data, max_neighbors, drs=False):
 
     # Adjust the mobility matrix
     np.fill_diagonal(mobility_matrix.values, 0.0)
+    #mobility_matrix *= 0.7
     # out vector has at entry i the proportion of the population of city i that leaves the
     # city during the day
     out = mobility_matrix.sum(axis = 1)
