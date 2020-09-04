@@ -158,208 +158,13 @@ end
 
 
 """
-    nonlinear_seir_model_with_free_initial_values(prm)
+    seir_model_with_free_initial_value(prm)
 
 Build an optimization model with the SEIR discretization as constraints. The inicial
 parameters are not initialized and remain free. This can be useful, for example, to fit the
 initial parameters to observed data.
 """
-function nonlinear_seir_model_with_free_initial_values(prm, verbosity=0)
-    # Save work and get col indices of both M and Mt
-    coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
-    coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
-
-    # Create the optimization model.
-    # I am reverting to mumps because I can not limit ma97 to use
-    # only the actual cores in my machine and mumps seems to be doing 
-    # fine.
-    if verbosity >= 1
-        println("Initializing optimization model...")
-    end
-
-    verbosity_ipopt = 0
-    if verbosity >= 2
-        verbosity_ipopt = 6 # Print summary and progress
-    end
-
-    m = Model(optimizer_with_attributes(Ipopt.Optimizer,
-        "print_level" => verbosity_ipopt, "linear_solver" => best_linear_solver()))
-    println("Initializing optimization model... Ok!")
-    # For simplicity I am assuming that one step per day is OK.
-    dt = 1.0
-
-    # Note that I do not fix the initial state. It should be defined elsewhere.
-    # State variables
-    if verbosity >= 1
-        println("Adding variables to the model...")
-    end
-    @variable(m, 0.0 <= s[1:prm.ncities, 1:prm.ndays] <= 1.0)
-    @variable(m, 0.0 <= e[1:prm.ncities, 1:prm.ndays] <= 1.0)
-    @variable(m, 0.0 <= i[1:prm.ncities, 1:prm.ndays] <= 1.0)
-    @variable(m, 0.0 <= r[1:prm.ncities, 1:prm.ndays] <= 1.0)
-
-    # Control variable
-    @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
-    
-    # Extra variables to better separate linear and nonlinear expressions and
-    # to decouple and "sparsify" the matrices.
-    # Obs. I tried many variations, only adding the variable below worded the best.
-    #      I tried to get rid of all SEIR variables and use only the initial conditions.
-    #      Add variables for sp, ep, ip, rp. Add a variable to represent s times i.
-    @variable(m, 0.1 <= p_day[1:prm.ncities, t=1:prm.ndays])
-    if verbosity >= 1
-        println("Adding variables to the model... Ok!")
-    end
-
-    # Expressions that define "sub-states"
-
-    # enter denotes the proportion of the population that enter city c during
-    # the day.
-    if verbosity >= 1
-        println("Defining additional expressions...")
-    end
-    @expression(m, enter[c=1:prm.ncities, t=1:prm.ndays],
-        sum(prm.M[k, c]*(1.0 - i[k, t]) for k in coli_M[c])
-    )
-    # p_day is the ratio that the population of a city varies during the day
-    @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        p_day[c, t] == (1.0 - prm.out[c]) + prm.out[c]*i[c, t] + enter[c, t]
-    )
-    if verbosity >= 1
-        println("Defining additional expressions... Ok!")
-    end
-
-    # Parameter that measures how much important is the infection during the day
-    # when compared to the night.
-    α = 2/3
-
-    # Compute the gradients at time t of the SEIR model.
-
-    # Estimates the infection rate of the susceptible people from city c
-    # that went to the other cities k.
-    if verbosity >= 1
-        println("Defining SEIR equations...")
-    end
-    @NLexpression(m, t1[c=1:prm.ncities, t=1:prm.ndays],
-        sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*s[c, t]*i[k, t]/p_day[k, t] for k = coli_Mt[c])
-    )
-    @NLexpression(m, ds[c=1:prm.ncities, t=1:prm.ndays],
-        -1.0/prm.tinf*(
-         α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*s[c, t]*i[c, t]/p_day[c, t] +
-             t1[c, t] ) +
-         (1 - α)*rt[c, mapind(t, prm)]*s[c, t]*i[c, t])
-    )
-    @NLexpression(m, de[c=1:prm.ncities, t=1:prm.ndays],
-        -ds[c, t] - (1.0/prm.tinc)*e[c,t]
-    )
-    @NLexpression(m, di[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0/prm.tinc)*e[c, t] - (1.0/prm.tinf)*i[c, t]
-    )
-    @NLexpression(m, dr[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0/prm.tinf)*i[c, t]
-    )
-    if verbosity >= 1
-        println("Defining SEIR equations... Ok!")
-    end
-
-    # discr_method = "finite_difference"
-    discr_method = "heun"
-    k_curr_t = 0.0
-    k_prev_t = 1.0
-
-    # Discretize SEIR equations
-    if discr_method == "finite_difference"
-        if verbosity >= 1
-            if k_curr_t == 1.0 && k_prev_t == 0.0
-                println("Discretizing SEIR equations (backward)...")
-            elseif k_curr_t == 0.0 && k_prev_t == 1.0
-                println("Discretizing SEIR equations (forward)...")
-            elseif k_curr_t == 0.5 && k_prev_t == 0.5
-                println("Discretizing SEIR equations (central)...")
-            end
-        end
-
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            s[c, t] == s[c, t - 1] + (k_prev_t*ds[c, t-1] + k_curr_t*ds[c, t])*dt
-        )
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            e[c, t] == e[c, t - 1] + (k_prev_t*de[c, t-1] + k_curr_t*de[c, t])*dt
-        )
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            i[c, t] == i[c, t - 1] + (k_prev_t*di[c, t-1] + k_curr_t*di[c, t])*dt
-        )
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            r[c, t] == r[c, t - 1] + (k_prev_t*dr[c, t-1] + k_curr_t*dr[c, t])*dt
-        )
-        if verbosity >= 1
-            println("Discretizing SEIR equations... Ok!")
-        end
-    elseif discr_method == "heun"
-        if verbosity >= 1
-            println("Discretizing SEIR equations (Heun)...")
-            println("Defining expressions for the intermediate point...")
-        end
-        # Do the Euler step from the point in time t - 1 computing the intermediate
-        # point that we express as ?p (p is for plus).
-        @NLexpression(m, sp[c=1:prm.ncities, t=2:prm.ndays], s[c, t - 1] + ds[c, t - 1]*dt)
-        @NLexpression(m, ep[c=1:prm.ncities, t=2:prm.ndays], e[c, t - 1] + de[c, t - 1]*dt)
-        @NLexpression(m, ip[c=1:prm.ncities, t=2:prm.ndays], i[c, t - 1] + di[c, t - 1]*dt)
-        @NLexpression(m, rp[c=1:prm.ncities, t=2:prm.ndays], r[c, t - 1] + dr[c, t - 1]*dt)
-
-        # Compute the gradients in the intermediate point.
-        @NLexpression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
-            sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*sp[c, t]*ip[k, t]/p_day[k, t] for k = coli_Mt[c])
-        )
-        @NLexpression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
-            -1.0/prm.tinf*(
-            α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*sp[c, t]*ip[c, t]/p_day[c, t] +
-                t2[c, t] ) +
-            (1 - α)*rt[c, mapind(t, prm)]*sp[c, t]*ip[c, t])
-        )
-        @NLexpression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
-            -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
-        )
-        @NLexpression(m, dip[c=1:prm.ncities, t=2:prm.ndays],
-            (1.0/prm.tinc)*ep[c, t] - (1.0/prm.tinf)*ip[c, t]
-        )
-        @NLexpression(m, drp[c=1:prm.ncities, t=2:prm.ndays],
-            (1.0/prm.tinf)*ip[c, t]
-        )
-        if verbosity >= 1
-            println("Defining expressions for the intermediate point... Ok!")
-        end
-
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt
-        )
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt
-        )
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt
-        )
-        @NLconstraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-            r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt
-        )
-        if verbosity >= 1
-            println("Discretizing SEIR equations (Heun)... Ok!")
-        end
-    else
-        throw("Invalid discretization method")
-    end
-
-    return m
-end
-
-
-"""
-    quadratic_seir_model_with_free_initial_value(prm)
-
-Build an optimization model with the SEIR discretization as constraints. The inicial
-parameters are not initialized and remain free. This can be useful, for example, to fit the
-initial parameters to observed data.
-"""
-function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
+function seir_model_with_free_initial_values(prm, verbosity=0)
     # Save work and get col indices of both M and Mt
     coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
     coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
@@ -538,84 +343,12 @@ function quadratic_seir_model_with_free_initial_values(prm, verbosity=0)
         if verbosity >= 1
             println("Discretizing SEIR equations... Ok!")
         end
-    # elseif discr_method == "heun"
-    #     if verbosity >= 1
-    #         println("Discretizing SEIR equations (Heun)...")
-    #         println("Adding variables for the intermediate point to the model...")
-    #     end
-    #     @variable(m, 0.0 <= sp[1:prm.ncities, 2:prm.ndays] <= 1.0)
-    #     @variable(m, 0.0 <= ep[1:prm.ncities, 2:prm.ndays] <= 1.0)
-    #     @variable(m, 0.0 <= ip[1:prm.ncities, 2:prm.ndays] <= 1.0)
-    #     @variable(m, 0.0 <= rp[1:prm.ncities, 2:prm.ndays] <= 1.0)
-    #     @variable(m, 0.0 <= spip[1:prm.ncities, t=1:prm.ndays] <= 1.0)
-    #     @variable(m, 0.0 <= spip_p_day[1:prm.ncities, t=1:prm.ndays])
-    #     if verbosity >= 1
-    #         println("Adding variables for the intermediate point to the model... Ok!")
-    #     end
-
-    #     # Do the Euler step from the point in time t - 1 computing the intermediate
-    #     # point that we express as ?p (p is for plus).
-    #     if verbosity >= 1
-    #         println("Adding constraints for the intermediate point...")
-    #     end
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], sp[c, t] == s[c, t - 1] + ds[c, t - 1]*dt)
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ep[c, t] == e[c, t - 1] + de[c, t - 1]*dt)
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], ip[c, t] == i[c, t - 1] + di[c, t - 1]*dt)
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays], rp[c, t] == r[c, t - 1] + dr[c, t - 1]*dt)
-
-    #     # Compute the gradients in the intermediate point.
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-    #         spip[c, t] == sp[c, t]*ip[c, t])
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-    #         spip_p_day[c, t]*p_day[c,t] == spip[c, t])
-    #     @expression(m, t2[c=1:prm.ncities, t=2:prm.ndays],
-    #         sum(rt[k, mapind(t, prm)]*prm.Mt[k, c]*spip_p_day[k, t] for k = coli_Mt[c])
-    #     )
-    #     @expression(m, dsp[c=1:prm.ncities, t=2:prm.ndays],
-    #         -1.0/prm.tinf*(
-    #         α*( rt[c, mapind(t, prm)]*(1.0 - prm.out[c])*spip_p_day[c, t] +
-    #             t2[c, t] ) +
-    #         (1 - α)*rt[c, mapind(t, prm)]*spip[c, t])
-    #     )
-    #     @expression(m, dep[c=1:prm.ncities, t=2:prm.ndays],
-    #         -dsp[c, t] - (1.0/prm.tinc)*ep[c,t]
-    #     )
-    #     @expression(m, dip[c=1:prm.ncities, t=2:prm.ndays],
-    #         (1.0/prm.tinc)*ep[c, t] - (1.0/prm.tinf)*ip[c, t]
-    #     )
-    #     @expression(m, drp[c=1:prm.ncities, t=2:prm.ndays],
-    #         (1.0/prm.tinf)*ip[c, t]
-    #     )
-    #     if verbosity >= 1
-    #         println("Adding constraints for the intermediate point... Ok!")
-    #     end
-
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-    #         s[c, t] == s[c, t - 1] + 0.5*(ds[c, t - 1] + dsp[c, t])*dt
-    #     )
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-    #         e[c, t] == e[c, t - 1] + 0.5*(de[c, t - 1] + dep[c, t])*dt
-    #     )
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-    #         i[c, t] == i[c, t - 1] + 0.5*(di[c, t - 1] + dip[c, t])*dt
-    #     )
-    #     @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
-    #         r[c, t] == r[c, t - 1] + 0.5*(dr[c, t - 1] + drp[c, t])*dt
-    #     )
-    #     if verbosity >= 1
-    #         println("Discretizing SEIR equations (Heun)... Ok!")
-    #     end
     else
         throw("Invalid discretization method")
     end
 
     return m
 end
-
-
-# Defines de default variation: the quadratic version
-const seir_model_with_free_initial_values = quadratic_seir_model_with_free_initial_values
-# seir_model_with_free_initial_values = nonlinear_seir_model_with_free_initial_values
 
 
 """
@@ -665,7 +398,7 @@ Fit the initial parameters for a single city using squared relative error and
 allowing rt to change to capture social distancing measures implemented in the
 mean time.
 
-# Attributes
+# Arguments
 
 - ttv_weight: controls the wight given to the total variation of the R0 parameter.
 """
@@ -716,7 +449,7 @@ Built a simple control problem that tries to force the infected to remain below 
 day for every city using daily controls but only allow them to change in the start of the
 time windows.
 
-# Attributes
+# Arguments
 
 - prm: SEIR parameters with initial state and other informations.
 - population: population of each city.
@@ -727,9 +460,11 @@ time windows.
 - hammer_durarion: Duration in days of a intial hammer phase.
 - hammer: Rt level that should be achieved during hammer phase.
 - min_rt: minimum rt achievable outside the hammer phases.
+- pools: groups of regions to be treated as a pool in the ICU constraints.
 """
 function window_control_multcities(prm, population, target, force_difference, 
-    hammer_duration=0, hammer=0.89, min_rt=1.0, verbosity=0)
+    hammer_duration=0, hammer=0.89, min_rt=1.0, pools=[[c] for c in 1:prm.ncities],
+    verbosity=0)
     @assert sum(mod.(hammer_duration, prm.window)) == 0
 
     m = seir_model(prm, verbosity)
@@ -765,83 +500,84 @@ function window_control_multcities(prm, population, target, force_difference,
     end
 
     # TODO: These should all be parameters - first try
-    
-    if prm.time_icu == 11
-        ρmin, ρmax = 0.00379873, 0.02360889
-        ϕ0 = 0.003055220184503005
-        ϕ1 = 1.346540496346441 
-        ϕ2 = -0.35212183634836325
-        σω = 0.0011820962652620602
-        A = [ϕ1 ϕ2; 1 0]
-        icu0 = 0.00379872899804252
-        icum1 = icu0
-    elseif prm.time_icu == 7
-        ρmin, ρmax = 0.00693521, 0.02830658
-        ϕ0 = 0.0030201845812784043
-        ϕ1 = 0.9945816723468636
-        ϕ2 = 0.0 # To avoid error.
-        σω = 0.0016102760532102568
-        icu0 = 0.00693521103887298
-        icum1 = icu0
+    if prm.time_icu == 7
+        time_series_data = [0.00951258, 0.02407533, 0.01565422, 0.0, 1.04877035, -0.07470716, sqrt(0.00413135),
+            0.01020326268631, 0.009768267929635]
+        # time_series_data = [0.00379873, 0.02360889, 0.003055220184503005, 0.0, 1.346540496346441, 
+        #     -0.35212183634836325, sqrt(0.0011820962652620602), 0.009821952043627, 0.009099877277162]
+        # time_series_data = [0.00926221, 0.01963079, 0.01034362, 0.0, 1.20388368, -0.22446884, sqrt(0.00495803),
+        #     0.009882415226021, 0.010207401448971]
+        # time_series_data =  [0.00683802, 0.02407533, 0.00483438, 0.0, 1.08987579, -0.09888466, sqrt(0.00210162), 
+        #     0.007187944540946, 0.006838016532435]
+    elseif prm.time_icu == 11
+        time_series_data = [0.00643884, 0.01740896, 0.0112156, 0.0, 1.10547981, -0.1245054, sqrt(0.00368004),
+            0.00692964502549, 0.006645629100376]
+        # time_series_data =  [0.00496131, 0.01740896, 0.0043539, 0.0, 1.12791817, -0.13644296, sqrt(0.00189557), 
+        #     0.005290328560701, 0.004961305864535]
+    else
+        error("Unimplemented")
     end
+    ρmin, ρmax = time_series_data[1:2]
+    c0 = time_series_data[3]
+    c1 = time_series_data[4]
+    ϕ1 = time_series_data[5]
+    ϕ2 = time_series_data[6]
+    σω = time_series_data[7]
+    A = [ϕ1 ϕ2; 1 0]
+    icum1 = time_series_data[8]
+    icu0 = time_series_data[9]     
     Δ = ρmax - ρmin
-    p = 0.05
+    p = 0.1
     F1p = quantile(Normal(), 1.0 - p)
 
     # We implement two variants one based on max I and another on sum on
     # entering in R
 
-    # # Entering in R
-    # firstday = max.(2, hammer_duration .+ 1)
-    # r = m[:r]
-    # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
-    # # As in the paper, V represents the number of people that will leave
-    # # infected and potentially go to ICU.
-    # @variable(m, sqV[c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu] >= 0)
-    # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
-    #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
-    # )
-
     # Max I
     i = m[:i]
     firstday = hammer_duration .+ 1
-    # As in the paper, V represents the number of people that will leave
-    # infected and potentially go to ICU.
-    @variable(m, sqV[c=1:prm.ncities, d=firstday[c]:prm.ndays - prm.time_icu] >= 0)
-    @constraint(m, [c=1:prm.ncities, d=firstday[c]:prm.ndays - prm.time_icu],
-                sqV[c, d]*sqV[c, d] == prm.time_icu/prm.tinf * i[c, d]
-    )
 
-    # Now create the capacity constraint for each day
-    for c in 1:prm.ncities
+    n_pools = length(pools)
+    first_pool_day = [minimum(firstday[pool]) for pool in pools]
+    pool_population = [sum(population[pool]) for pool in pools]
+    @variable(m, V[p=1:n_pools, d=first_pool_day[p]:prm.ndays - prm.time_icu] >= 0)
+    for p in 1:n_pools
+        pool = pools[p]
+        # As in the paper, V represents the number of people that will leave
+        # infected and potentially go to ICU.
+        @constraint(m, [d=first_pool_day[p]:prm.ndays - prm.time_icu],
+            V[p, d] == prm.time_icu/prm.tinf*sum(population[c]*i[c, d] for c in pool) / pool_population[p]
+        )
+
+        # # Entering in R
+        # TODO: adapt to use pools
+        # firstday = max.(2, hammer_duration .+ 1)
+        # r = m[:r]
+        # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
+        # # As in the paper, V represents the number of people that will leave
+        # # infected and potentially go to ICU.
+        # @variable(m, sqV[c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu] >= 0)
+        # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
+        #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
+        # )
         Ad = [ϕ1 ϕ2; 1 0]
-        ϕ1d = ϕ1
-        sumΘ = 1.0
+        sumΘ, sumΘtmk, sumΘ2 = 1.0, 1.0, 1.0
+        #println()
         for d in 1:prm.ndays - prm.time_icu
-            if prm.time_icu == 7
-                Eicu = (1 - ϕ1d)*ρmin + Δ*sumΘ*ϕ0 + ϕ1d*icu0
-            elseif prm.time_icu == 11
-                Eicu = (1 - Ad[1, 1] - Ad[1, 2])*ρmin + Δ*sumΘ*ϕ0 + 
-                       Ad[1, 1]*icu0 + Ad[1, 2]*icum1
-            end
-            if d >= firstday[c]
-                @constraint(m, 
-                    Eicu*sqV[c, d]*sqV[c, d] + 
-                    F1p*σω*sqrt(Δ*sumΘ)*sqV[c, d]/sqrt(population[c]) 
-                    <= target[c, d]*prm.availICU[c]
+            Eicu = (1 - Ad[1, 1] - Ad[1, 2])*ρmin + Δ*sumΘ*c0 + Δ*sumΘtmk*c1 + Ad[1, 1]*icu0 + Ad[1, 2]*icum1
+            if d >= first_pool_day[p]
+                @constraint(m,
+                    (Eicu + F1p*σω*Δ*sqrt(sumΘ2))*V[p, d] <= 
+                    sum(target[c, d]*population[c]*prm.availICU[c] for c in pool) / pool_population[p]
                 )
             end
-            print(Eicu, " ")
-            println(F1p*σω*sqrt(Δ*sumΘ))
-            if prm.time_icu == 7
-                sumΘ += ϕ1d
-                ϕ1d = ϕ1 * ϕ1d
-            elseif prm.time_icu == 11
-                sumΘ += Ad[1, 1]
-                Ad = A * Ad
-            end
+            #println(Eicu, " ", F1p*σω*Δ*sqrt(sumΘ2), " ", Eicu + F1p*σω*Δ*sqrt(sumΘ2))
+            #println("$F1p $σω $Δ $(sqrt(sumΘ2))")
+            sumΘ += Ad[1, 1]
+            sumΘ2 += Ad[1, 1] * Ad[1, 1]
+            sumΘtmk += sumΘ
+            Ad = A * Ad
         end
-        println()
     end
 
     # # Simple form that is based only on the upper bound and means.

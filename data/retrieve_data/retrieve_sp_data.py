@@ -34,8 +34,8 @@ sub_rmsp = {
 valid_date = pd.to_datetime("2020-03-01")
 
 # name of the mobility matrix file
-mobility_name = "move_mat_SÃO PAULO_SP-Municipios_norm.csv"
-mobility_cities = "move_mat_SÃO PAULO_SP-Municipios_reg_names.txt"
+mobility_name = "move_mat_new.csv"
+mobility_cities = "names_new.csv"
 
 ##################### Script
 
@@ -132,7 +132,7 @@ sp.reset_index(inplace=True)
 sp = sp.loc[: ,["nome_munic", "datahora", "casos", "pop", "icu_capacity"]]
 sp["state"] = "SP"
 sp.columns = ["city", "date", "confirmed", "estimated_population_2019", "icu_capaciy", "state"]
-sp.to_csv("covid_with_cities.csv")
+sp.to_csv("../covid_with_cities.csv")
 
 for d in pop_drs.index:
     drs.loc[d, "pop"] = pop_drs[d]
@@ -140,6 +140,6 @@ drs.reset_index(inplace=True)
 drs = drs.loc[: ,["nome_drs", "datahora", "casos", "pop", "icu_capacity"]]
 drs["state"] = "SP"
 drs.columns = ["city", "date", "confirmed", "estimated_population_2019", "icu_capacity", "state"]
-drs.to_csv("covid_with_drs.csv")
-mobility_matrix.to_csv("drs_mobility.csv")
+drs.to_csv("../covid_with_drs.csv")
+mobility_matrix.to_csv("../drs_mobility.csv")
 
