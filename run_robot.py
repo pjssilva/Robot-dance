@@ -9,6 +9,7 @@ from optparse import OptionParser
 import pandas as pd
 import numpy as np
 from scipy.integrate import solve_ivp
+import scipy.stats as stats
 from timeit import default_timer as timer
 from matplotlib import gridspec
 from matplotlib.patches import Rectangle
@@ -24,50 +25,32 @@ import prepare_data
 class SimpleTimeSeries:
     """Simple time series of one or two steps.
     """
-    def __init__(self, tau):
-        # TODO: Of course this should not be hard coded...
-        if tau == 7:
-            p = 1
-            rhomin, rhomax = 0.00693521, 0.02830658
-            phi0 = 0.0030201845812784043
-            phi1 = 0.9945816723468636
-            phi2 = None
-            sigmaw = 0.0016102760532102568
-            initial = 0.00693521103887298
-        elif tau == 11:
-            p = 2
-            rhomin, rhomax = 0.00379873, 0.02360889
-            phi0 = 0.003055220184503005
-            phi1 = 1.346540496346441 
-            phi2 = -0.35212183634836325
-            sigmaw = 0.0011820962652620602
-            initial = 0.00379872899804252
-        else:
-            raise NotImplementedError("Time series not implemented")
-    
-        self.p = p
-        self.rhomin = rhomin
-        self.whomax = rhomax
-        self.phi0 = phi0
-        self.phi1 = phi1
-        self.phi2 = phi2
+    def __init__(self, rhomin, rhomax, c0, c1, phi1, phi2, sigmaw, initialm1, initial0):
+        self.rhomin, self.rhomax = rhomin, rhomax
+        self.C0, self.C1 = np.array([c0, 0]), np.array([c1, 0])
+        self.A = np.array([[phi1, phi2], [1, 0]])
         self.sigmaw = sigmaw
+        self.initial = np.array([initial0, initialm1])
         self.delta = rhomax - rhomin
-        rho0 = (initial - rhomin) / self.delta
-        if p == 2:
-            self.A = np.array([[phi1, phi2], [1, 0]])
-            self.state = np.array([rho0, rho0])
-        else:
-            self.A = None
-            self.state = rho0
+        self.reset()
     
-    def iterate(self):
-        if self.p == 1:
-            self.state = self.phi0 + self.phi1*self.state
-            return self.rhomin + self.delta*self.state
-        else:
-            self.state = np.array([self.phi0, 0]) + self.A @ self.state
+
+    def iterate(self, random=False):
+        self.t += 1
+        self.theta.append(self.Ak[0, 0])
+        self.Ak = self.A @ self.Ak
+        self.state = self.C0 + self.C1*self.t + self.A @ self.state
+        if random:
+            self.state[0] += np.random.normal(scale=self.sigmaw)
             return self.rhomin + self.delta*self.state[0]
+
+
+    def reset(self):
+        self.t = 0
+        self.theta = []
+        self.Ak = np.array([[1.0, 0], [0, 1]])
+        self.state = (self.initial - self.rhomin) / self.delta
+        
 
 
 # To use PyJulia
@@ -162,7 +145,7 @@ def read_data(options, verbosity=0):
 
 
 def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, 
-    force_dif=1, verbosity=0, test_budget=0):
+    force_dif=1, pools=None, verbosity=0):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
@@ -198,12 +181,15 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.hammer_level = hammer_data["level"].values
     Julia.verbosity = verbosity
     Julia.window = basic_prm["window"]
-    Julia.test_budget = test_budget
+    if pools is None:
+        Julia.eval("pools = [[c] for c in 1:length(s1)]")
+    else:
+        Julia.pools = pools
     Julia.eval("""
         prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
                               s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
-            hammer_level, min_level, verbosity, test_budget);
+                                      hammer_level, min_level, pools, verbosity, test_budget);
     """)
 
     # Check if there is a ramp parameter (delta_rt_max)
@@ -215,15 +201,38 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
             m = add_ramp(m, prm, hammer_duration, delta_rt_max, verbosity)
         """)
 
+def compute_need_icu(ts_parameters, basic_prm):
+    p = 0.1
+    F1p = stats.norm.ppf(1.0 - p)
+    time_series = SimpleTimeSeries(*ts_parameters)
+    need_icu = [time_series.iterate() for i in range(int(basic_prm["ndays"]))]
+    # TODO: not sure p should be hard coded
+    theta = np.array(time_series.theta).copy()
+    for i in range(int(basic_prm["ndays"])):
+        need_icu[i] += F1p*time_series.sigmaw*time_series.delta*np.sqrt((theta[:i + 1]**2).sum())
+    return need_icu
+
 
 def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, 
     out_file=None, incr_all=False, verbosity=0):
     """Find hammer durations for each city such that the optimization problem will 
     (hopefully) be feasible
     """
+    # TODO: This has to be transformed into parameters
+    rmsp = pool = np.array([9, 15, 16, 17, 18, 19]) - 1
+    if basic_prm["time_icu"] == 7:
+        need_icu_sp = compute_need_icu([0.01099859, 0.02236023, 0.00370254, 0.0, 1.79119571, -0.80552926, 
+            np.sqrt(0.00034005), 0.011644768910252, 0.011221496171591], basic_prm)
+        need_icu_notsp = compute_need_icu([0.0076481, 0.0218084, 0.00367839, 0.0, 1.81361379, -0.82550856, 
+            np.sqrt(8.028E-05), 0.007907216664912, 0.007721801045322], basic_prm)
+    elif basic_prm["time_icu"] == 11:
+        need_icu_sp = compute_need_icu([0.0074335, 0.01523406, -0.00186355, 0.0, 1.67356018, -0.68192908, 
+            np.sqrt(0.00023883), 0.007682840158843, 0.007536060983504], basic_prm)
+        need_icu_notsp = compute_need_icu([0.00520255, 0.01532709, 0.00044498, 0.0, 1.75553282, -0.76360711,
+            np.sqrt(3.567E-05), 0.005426447471187, 0.005282217308748], basic_prm)
+    else:
+        raise NotImplementedError
 
-    time_series = SimpleTimeSeries(basic_prm["time_icu"])
-    need_icu = [time_series.iterate() for i in range(int(basic_prm["ndays"]))]
 
     if verbosity >= 1:
         print('Checking if initial hammer is long enough...')
@@ -268,7 +277,12 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
-            target_hammer[c] = 0.8*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
+            if c in rmsp:
+                need_icu = need_icu_sp
+            else:
+                need_icu = need_icu_notsp
+
+            target_hammer[c] = 0.7*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
             i_after_hammer[c] = basic_prm["time_icu"]*need_icu[hammer_duration[c]]*max(
                 isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 
@@ -615,12 +629,12 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, ve
     name, extension = os.path.splitext(figure_file)
 
     figure_file =  name + "-rt" + extension
-    plot_result(basic_prm, result, figure_file, cities_data["start_date"][0], type="rt")
-    plt.savefig(figure_file, dpi=150)
+    plot_result(basic_prm, result, figure_file, Julia.hammer_duration, cities_data["start_date"][0], type="rt")
+    plt.savefig(figure_file, dpi=150, bbox_inches='tight')
 
     figure_file =  name + "-test" + extension
-    plot_result(basic_prm, result, figure_file, cities_data["start_date"][0], type="test")
-    plt.savefig(figure_file, dpi=150)
+    plot_result(basic_prm, result, figure_file, Julia.hammer_duration, cities_data["start_date"][0], type="test")
+    plt.savefig(figure_file, dpi=150, bbox_inches='tight')
 
     if verbosity >= 1:
         print("Ploting result... OK!")
@@ -628,14 +642,18 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, ve
     return stats
 
 
-def plot_result(basic_prm, result, figure_file, start_date=None, type="test"):
+def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None, subset=None, type="test"):
     """Plot result in a single figure.
     """
     # TODO: Put this constant out
     sars_over_cov = 4.0
     
     # Get data
+    if subset is None:
     cities = result.index.get_level_values(0).unique()
+    else:
+        cities = subset
+        
     max_city_len = np.max([len(c) for c in cities])
     window = int(basic_prm["window"])
     if start_date is not None:
@@ -648,8 +666,8 @@ def plot_result(basic_prm, result, figure_file, start_date=None, type="test"):
         city_name = cities[j]
         i, rt = result.loc[city_name, "i"], result.loc[city_name, "rt"]
         max_i[j, 0] = i.max()
-        non_minimal = (rt > rt.min()).argmax()
-        max_i[j, 1] = i.iloc[non_minimal:].max()
+        end_hammer = hammer_duration[j] 
+        max_i[j, 1] = i.iloc[end_hammer:].max()
                 
     # Create figure    
     fig = plt.figure(figsize=(15, 1*ncities), constrained_layout=False)
@@ -683,7 +701,7 @@ def plot_result(basic_prm, result, figure_file, start_date=None, type="test"):
         # Get data
         city_name = cities[j]
         i, rt = result.loc[city_name, "i"], result.loc[city_name, "rt"]
-        test = result.loc[city_name, "test"] / (4.0*i)
+        test = result.loc[city_name, "test"] / (sars_over_cov*i)
         ndays = len(i) - 1
 
         # Prepare figure
