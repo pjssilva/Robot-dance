@@ -200,37 +200,38 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
             m = add_ramp(m, prm, hammer_duration, delta_rt_max, verbosity)
         """)
 
+def compute_need_icu(ts_parameters, basic_prm):
+    p = 0.1
+    F1p = stats.norm.ppf(1.0 - p)
+    time_series = SimpleTimeSeries(*ts_parameters)
+    need_icu = [time_series.iterate() for i in range(int(basic_prm["ndays"]))]
+    # TODO: not sure p should be hard coded
+    theta = np.array(time_series.theta).copy()
+    for i in range(int(basic_prm["ndays"])):
+        need_icu[i] += F1p*time_series.sigmaw*time_series.delta*np.sqrt((theta[:i + 1]**2).sum())
+    return need_icu
+
 
 def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, 
     out_file=None, incr_all=False, verbosity=0):
     """Find hammer durations for each city such that the optimization problem will 
     (hopefully) be feasible
     """
+    # TODO: This has to be transformed into parameters
+    rmsp = pool = np.array([9, 15, 16, 17, 18, 19]) - 1
     if basic_prm["time_icu"] == 7:
-        time_series_data = [0.00951258, 0.02407533, 0.01565422, 0.0, 1.04877035, -0.07470716, np.sqrt(0.00413135),
-            0.01020326268631, 0.009768267929635]
-        # time_series_data = [0.00379873, 0.02360889, 0.003055220184503005, 0.0, 1.346540496346441, -0.35212183634836325, 
-        #     np.sqrt(0.0011820962652620602), 0.009821952043627, 0.009099877277162]
-        # time_series_data = [0.00926221, 0.01963079, 0.01034362, 0.0, 1.20388368, -0.22446884, np.sqrt(0.00495803), 
-        #     0.009882415226021, 0.010207401448971]
-        # time_series_data =  [0.00683802, 0.02407533, 0.00483438, 0.0, 1.08987579, -0.09888466, np.sqrt(0.00210162), 
-        #     0.007187944540946, 0.006838016532435]
+        need_icu_sp = compute_need_icu([0.01099859, 0.02236023, 0.00370254, 0.0, 1.79119571, -0.80552926, 
+            np.sqrt(0.00034005), 0.011644768910252, 0.011221496171591], basic_prm)
+        need_icu_notsp = compute_need_icu([0.0076481, 0.0218084, 0.00367839, 0.0, 1.81361379, -0.82550856, 
+            np.sqrt(8.028E-05), 0.007907216664912, 0.007721801045322], basic_prm)
     elif basic_prm["time_icu"] == 11:
-        time_series_data = [0.00643884, 0.01740896, 0.0112156, 0.0, 1.10547981, -0.1245054, np.sqrt(0.00368004),
-            0.00692964502549, 0.006645629100376]
-        # time_series_data =  [0.00496131, 0.01740896, 0.0043539, 0.0, 1.12791817, -0.13644296, np.sqrt(0.00189557), 
-        #     0.005290328560701, 0.004961305864535]
+        need_icu_sp = compute_need_icu([0.0074335, 0.01523406, -0.00186355, 0.0, 1.67356018, -0.68192908, 
+            np.sqrt(0.00023883), 0.007682840158843, 0.007536060983504], basic_prm)
+        need_icu_notsp = compute_need_icu([0.00520255, 0.01532709, 0.00044498, 0.0, 1.75553282, -0.76360711,
+            np.sqrt(3.567E-05), 0.005426447471187, 0.005282217308748], basic_prm)
     else:
         raise NotImplementedError
 
-    time_series = SimpleTimeSeries(*time_series_data)
-    need_icu = [time_series.iterate() for i in range(int(basic_prm["ndays"]))]
-    # TODO: not sure p should be hard coded
-    p = 0.1
-    F1p = stats.norm.ppf(1.0 - p)
-    theta = np.array(time_series.theta).copy()
-    for i in range(int(basic_prm["ndays"])):
-        need_icu[i] += F1p*time_series.sigmaw*time_series.delta*np.sqrt((theta[:i + 1]**2).sum())
 
     if verbosity >= 1:
         print('Checking if initial hammer is long enough...')
@@ -275,7 +276,12 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
-            target_hammer[c] = 0.8*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
+            if c in rmsp:
+                need_icu = need_icu_sp
+            else:
+                need_icu = need_icu_notsp
+
+            target_hammer[c] = 0.7*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
             i_after_hammer[c] = basic_prm["time_icu"]*need_icu[hammer_duration[c]]*max(
                 isim[c][hammer_duration[c] + 1:])/basic_prm["tinf"]
 

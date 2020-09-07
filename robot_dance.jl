@@ -14,6 +14,7 @@ using LinearAlgebra
 using SparseArrays
 using Distributions
 import Statistics.mean
+include("simple_arts.jl")
 
 """
     struct SEIR_Parameters
@@ -467,6 +468,25 @@ function window_control_multcities(prm, population, target, force_difference,
     verbosity=0)
     @assert sum(mod.(hammer_duration, prm.window)) == 0
 
+    # TODO: These should be parameters - first try
+    if prm.time_icu == 7
+        ρ_icu_sp = Simple_ARTS(0.01099859, 0.02236023, 0.00370254, 0.0,	[1.79119571, -0.80552926],
+            sqrt(0.00034005), [0.011221496171591, 0.011644768910252], 0.1)
+        ρ_icu_notsp = Simple_ARTS(0.0076481, 0.0218084, 0.00367839, 0.0, [1.81361379, -0.82550856], 
+            sqrt(8.028E-05), [0.007721801045322, 0.007907216664912], 0.1)
+    elseif prm.time_icu == 11
+        ρ_icu_sp = Simple_ARTS(0.0074335, 0.01523406, -0.00186355, 0.0, [1.67356018, -0.68192908], 
+            sqrt(0.00023883), [0.007536060983504, 0.007682840158843], 0.1)
+        ρ_icu_notsp = Simple_ARTS(0.00520255, 0.01532709, 0.00044498, 0.0, [1.75553282, -0.76360711],
+            sqrt(3.567E-05), [0.005282217308748, 0.005426447471187], 0.1)
+    else
+        error("Unimplemented")
+    end
+    times_series = [ρ_icu_notsp for i = 1:prm.ncities]
+    for c in [9, 15, 16, 17, 18, 19]
+        times_series[c] = ρ_icu_sp
+    end
+
     m = seir_model(prm, verbosity)
 
     if verbosity >= 1
@@ -499,37 +519,6 @@ function window_control_multcities(prm, population, target, force_difference,
         println("Setting limits for number of infected...")
     end
 
-    # TODO: These should all be parameters - first try
-    if prm.time_icu == 7
-        time_series_data = [0.00951258, 0.02407533, 0.01565422, 0.0, 1.04877035, -0.07470716, sqrt(0.00413135),
-            0.01020326268631, 0.009768267929635]
-        # time_series_data = [0.00379873, 0.02360889, 0.003055220184503005, 0.0, 1.346540496346441, 
-        #     -0.35212183634836325, sqrt(0.0011820962652620602), 0.009821952043627, 0.009099877277162]
-        # time_series_data = [0.00926221, 0.01963079, 0.01034362, 0.0, 1.20388368, -0.22446884, sqrt(0.00495803),
-        #     0.009882415226021, 0.010207401448971]
-        # time_series_data =  [0.00683802, 0.02407533, 0.00483438, 0.0, 1.08987579, -0.09888466, sqrt(0.00210162), 
-        #     0.007187944540946, 0.006838016532435]
-    elseif prm.time_icu == 11
-        time_series_data = [0.00643884, 0.01740896, 0.0112156, 0.0, 1.10547981, -0.1245054, sqrt(0.00368004),
-            0.00692964502549, 0.006645629100376]
-        # time_series_data =  [0.00496131, 0.01740896, 0.0043539, 0.0, 1.12791817, -0.13644296, sqrt(0.00189557), 
-        #     0.005290328560701, 0.004961305864535]
-    else
-        error("Unimplemented")
-    end
-    ρmin, ρmax = time_series_data[1:2]
-    c0 = time_series_data[3]
-    c1 = time_series_data[4]
-    ϕ1 = time_series_data[5]
-    ϕ2 = time_series_data[6]
-    σω = time_series_data[7]
-    A = [ϕ1 ϕ2; 1 0]
-    icum1 = time_series_data[8]
-    icu0 = time_series_data[9]     
-    Δ = ρmax - ρmin
-    p = 0.1
-    F1p = quantile(Normal(), 1.0 - p)
-
     # We implement two variants one based on max I and another on sum on
     # entering in R
 
@@ -537,12 +526,20 @@ function window_control_multcities(prm, population, target, force_difference,
     i = m[:i]
     firstday = hammer_duration .+ 1
 
+    println(pools)
     n_pools = length(pools)
-    first_pool_day = [minimum(firstday[pool]) for pool in pools]
+    first_pool_day = [minimum(firstday[pool]) for pool in pools]    
+    # TODO: Erase if not used.
+    #first_pool_day += [length(pool) > 1 ? 14 : 0 for pool in pools]
     pool_population = [sum(population[pool]) for pool in pools]
     @variable(m, V[p=1:n_pools, d=first_pool_day[p]:prm.ndays - prm.time_icu] >= 0)
     for p in 1:n_pools
         pool = pools[p]
+        # Uses the time series that gives the ratio of IC needed from the first
+        # city in the pool.
+        ρ_icu = times_series[pool[1]]
+        reset(ρ_icu)
+
         # As in the paper, V represents the number of people that will leave
         # infected and potentially go to ICU.
         @constraint(m, [d=first_pool_day[p]:prm.ndays - prm.time_icu],
@@ -560,23 +557,17 @@ function window_control_multcities(prm, population, target, force_difference,
         # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
         #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
         # )
-        Ad = [ϕ1 ϕ2; 1 0]
-        sumΘ, sumΘtmk, sumΘ2 = 1.0, 1.0, 1.0
         #println()
         for d in 1:prm.ndays - prm.time_icu
-            Eicu = (1 - Ad[1, 1] - Ad[1, 2])*ρmin + Δ*sumΘ*c0 + Δ*sumΘtmk*c1 + Ad[1, 1]*icu0 + Ad[1, 2]*icum1
+            Eicu, safety_level = iterate(ρ_icu)
             if d >= first_pool_day[p]
                 @constraint(m,
-                    (Eicu + F1p*σω*Δ*sqrt(sumΘ2))*V[p, d] <= 
+                    (Eicu + safety_level)*V[p, d] <= 
                     sum(target[c, d]*population[c]*prm.availICU[c] for c in pool) / pool_population[p]
                 )
             end
             #println(Eicu, " ", F1p*σω*Δ*sqrt(sumΘ2), " ", Eicu + F1p*σω*Δ*sqrt(sumΘ2))
             #println("$F1p $σω $Δ $(sqrt(sumΘ2))")
-            sumΘ += Ad[1, 1]
-            sumΘ2 += Ad[1, 1] * Ad[1, 1]
-            sumΘtmk += sumΘ
-            Ad = A * Ad
         end
     end
 
