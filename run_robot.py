@@ -650,7 +650,7 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
     
     # Get data
     if subset is None:
-    cities = result.index.get_level_values(0).unique()
+        cities = result.index.get_level_values(0).unique()
     else:
         cities = subset
         
