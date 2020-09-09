@@ -42,7 +42,7 @@ class SimpleTimeSeries:
         self.state = self.C0 + self.C1*self.t + self.A @ self.state
         if random:
             self.state[0] += np.random.normal(scale=self.sigmaw)
-            return self.rhomin + self.delta*self.state[0]
+        return self.rhomin + self.delta*self.state[0]
 
 
     def reset(self):
@@ -145,7 +145,7 @@ def read_data(options, verbosity=0):
 
 
 def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, 
-    force_dif=1, pools=None, verbosity=0):
+    force_dif=1, pools=None, verbosity=0, test_budget=0):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
@@ -181,6 +181,7 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.hammer_level = hammer_data["level"].values
     Julia.verbosity = verbosity
     Julia.window = basic_prm["window"]
+    Julia.test_budget = test_budget
     if pools is None:
         Julia.eval("pools = [[c] for c in 1:length(s1)]")
     else:

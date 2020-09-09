@@ -598,22 +598,32 @@ function window_control_multcities(prm, population, target, force_difference,
     # )
 
     # Constraints on the tests
-    test, i = m[:test], m[:i]
-    # Only use the given budget of tests
-    @constraint(m, use_test_available,
-        sum(population[c]*sum(test[c, d] for d = 1:prm.ndays) for c = 1:prm.ncities) <= 
-        test_budget
-    )
-    # Maximal ammount of daily test https://www.saopaulo.sp.gov.br/ultimas-noticias/sp-mira-30-mil-testes-diarios-coronavirus-com-inclusao-exames-privados/
-    max_daily = 50000000
-    @constraint(m, max_day[d=1:prm.ndays],
-        sum(population[c]*test[c, d] for c = 1:prm.ncities) <= max_daily
-    )
-    @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
-        test[c, d] <= 1.0/cov_over_sars * i[c, d]
-    )
-    # turn_off = [1, 2, 3, 6, 8, 10, 13, 15, 16, 17, 18, 20, 21, 22]
-    # @constraint(m, [c=turn_off, d=1:prm.ndays], test[c, d] == 0.0)
+    if test_budget > 0
+        test, i = m[:test], m[:i]
+        max_pop = maximum(population)
+        # Only use the given budget of tests
+        @constraint(m, use_test_available,
+            sum(population[c]*sum(test[c, d] for d = 1:prm.ndays) for c = 1:prm.ncities)/max_pop <= test_budget / max_pop
+        )
+        # Maximal ammount of daily test https://www.saopaulo.sp.gov.br/ultimas-noticias/sp-mira-30-mil-testes-diarios-coronavirus-com-inclusao-exames-privados/
+        max_daily = 50000.0
+        if max_daily > 0.0
+            @constraint(m, max_day[d=1:prm.ndays],
+                sum(population[c]*test[c, d] for c = 1:prm.ncities) / max_pop <= max_daily / max_pop
+            )
+        end
+        @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
+            cov_over_sars * test[c, d] <= i[c, d]
+        )
+        # turn_off = [1, 2, 3, 6, 8, 10, 13, 15, 16, 17, 18, 20, 21, 22]
+        # @constraint(m, [c=turn_off, d=1:prm.ndays], test[c, d] == 0.0)
+    else
+        test = m[:test]
+        for c = 1:prm.ncities, d = 1:prm.ndays
+            fix(test[c, d], 0.0; force=true)
+        end
+    end
+    
     
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
