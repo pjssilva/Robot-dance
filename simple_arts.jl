@@ -40,6 +40,12 @@ mutable struct Simple_ARTS
 
         new(rhomin, rhomax, Δ, vec_c0, vec_c1, A, σω, s0, 0, state, Ak, sumΘ2,  F1p)
     end
+
+    function Simple_ARTS(rhomin, rhomax, c0, c1, ϕ1, ϕ2, σω, state_minus_1, state_0,
+        confidence)
+        Simple_ARTS(rhomin, rhomax, c0, c1, [ϕ1, ϕ2], σω, [state_0, state_minus_1], 1.0 - 
+            confidence)
+    end
 end
 
 function reset(arts::Simple_ARTS)

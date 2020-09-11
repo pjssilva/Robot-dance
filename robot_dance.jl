@@ -27,9 +27,12 @@ Parameters to define a SEIR model:
   you might want to use 2.5 or a similar value.
 - ndays: simulation duration.
 - ncities: number of (interconnected) cities in the model.
-- time_icu: mean time in ICU.
-- need_icu: number of infected that need to go to ICU.
 - s1, e1, i1, r1: start proportion of the population in each SEIR class.
+- alternate: the weight to give to alternation in the solution.
+- availICU: vector with the ratio of avaible ICU.
+- time_icu: mean stay in ICU
+- rho_icu_ts: information on the time series to estimate the ratio of ICU needed
+    for each infected.
 - window: time window to keep rt constant.
 - out: vector that represents the proportion of the population that leave each city during
     the day.
@@ -47,67 +50,71 @@ struct SEIR_Parameters
     rep::Float64
     ndays::Int64
     ncities::Int64
-    time_icu::Int64
-    need_icu::Float64
-    alternate::Float64
     s1::Vector{Float64}
     e1::Vector{Float64}
     i1::Vector{Float64}
     r1::Vector{Float64}
+    alternate::Float64
     availICU::Vector{Float64}
+    time_icu::Int64
+    rho_icu_ts::Matrix{Float64}
     window::Int64
     out::Vector{Float64}
     M::SparseMatrixCSC{Float64,Int64}
     Mt::SparseMatrixCSC{Float64,Int64}
 
     """
-        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window, out, M, Mt)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate,
+        availICU, rho_icu_ts, window, out, M, Mt)
 
     SEIR parameters with mobility information (out, M, Mt).
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
-            s1, e1, i1, r1, availICU, window, out, M, Mt)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate, availICU, 
+        time_icu, rho_icu_ts, window, out, M, Mt)
         ls1 = length(s1)
         @assert length(e1) == ls1
         @assert length(i1) == ls1
         @assert length(r1) == ls1
         @assert length(availICU) == ls1
+        @assert time_icu > 0.0
+        @assert size(rho_icu_ts) == (ls1, 10)
+        @assert size(out) == (ls1,)
+        @assert all(out .>= 0.0)
         @assert size(M) == (ls1, ls1)
         @assert all(M .>= 0.0)
         @assert size(Mt) == (ls1, ls1)
         @assert all(Mt .>= 0.0)
-        @assert size(out) == (ls1,)
-        @assert all(out .>= 0.0)
 
-        new(tinc, tinf, rep, ndays, ls1, time_icu, need_icu, alternate, s1, e1, i1, r1,
-            availICU, window, out, M, Mt)
+        new(tinc, tinf, rep, ndays, ls1, s1, e1, i1, r1, alternate, availICU, time_icu,
+            rho_icu_ts, window, out, M, Mt)
     end
 
     """
-        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, window)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate,
+        availICU, rho_icu_ts, window)
 
     SEIR parameters without mobility information, which is assumed to be 0.
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
-            s1, e1, i1, r1, availICU, window)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate, availICU, 
+        time_icu, rho_icu_ts, window)
         ls1 = length(s1)
         out = zeros(ls1)
         M = spzeros(ls1, ls1)
         Mt = spzeros(ls1, ls1)
-        SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
-            s1, e1, i1, r1, availICU, window, out, M, Mt)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate, availICU, 
+            time_icu, rho_icu_ts, window, out, M, Mt)
     end
 
     """
-        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate, availICU)
 
     SEIR parameters with unit time window and without mobility information, which is assumed 
     to be 0.
     """
-    function SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
-        s1, e1, i1, r1, availICU)
-        SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate,
-            s1, e1, i1, r1, availICU, 1)
+    function SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate, availICU,
+        time_icu, rho_icu_ts)
+        SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate, availICU, 
+            time_icu, rho_icu_ts, 1)
     end
 end
 
@@ -413,10 +420,10 @@ mean time.
 
 - ttv_weight: controls the wight given to the total variation of the R0 parameter.
 """
-function fit_initial(tinc, tinf, rep, time_icu, need_icu, data, ttv_weight=0.25)
+function fit_initial(tinc, tinf, rep, time_icu, data, ttv_weight=0.25)
     # Create SEIR model
-    prm = SEIR_Parameters(tinc, tinf, rep, length(data), time_icu, need_icu, 1.0,
-         [1.0], [0.0], [0.0], [0.0], [1.0], 1, [0.0], zeros(1, 1), zeros(1, 1))
+    prm = SEIR_Parameters(tinc, tinf, rep, length(data), [1.0], [0.0], [0.0], [0.0], 
+        0.0, [0.0], time_icu, zeros(1, 10), 1, [0.0], zeros(1, 1), zeros(1, 1))
 
     m = seir_model_with_free_initial_values(prm)
 
@@ -474,6 +481,7 @@ time windows.
 - hammer_durarion: Duration in days of a intial hammer phase.
 - hammer: Rt level that should be achieved during hammer phase.
 - min_rt: minimum rt achievable outside the hammer phases.
+- pools: groups of regions to be treated as a pool in the ICU constraints.
 """
 function window_control_multcities(prm, population, target, force_difference, 
     hammer_duration=0, hammer=0.89, min_rt=1.0, pools=[[c] for c in 1:prm.ncities],
@@ -485,23 +493,7 @@ function window_control_multcities(prm, population, target, force_difference,
     cov_over_sars = 0.25
 
     # TODO: These should be parameters - first try
-    if prm.time_icu == 7
-        ρ_icu_sp = Simple_ARTS(0.01099859, 0.02236023, 0.00370254, 0.0,	[1.79119571, -0.80552926],
-            sqrt(0.00034005), [0.011221496171591, 0.011644768910252], 0.1)
-        ρ_icu_notsp = Simple_ARTS(0.0076481, 0.0218084, 0.00367839, 0.0, [1.81361379, -0.82550856], 
-            sqrt(8.028E-05), [0.007721801045322, 0.007907216664912], 0.1)
-    elseif prm.time_icu == 11
-        ρ_icu_sp = Simple_ARTS(0.0074335, 0.01523406, -0.00186355, 0.0, [1.67356018, -0.68192908], 
-            sqrt(0.00023883), [0.007536060983504, 0.007682840158843], 0.1)
-        ρ_icu_notsp = Simple_ARTS(0.00520255, 0.01532709, 0.00044498, 0.0, [1.75553282, -0.76360711],
-            sqrt(3.567E-05), [0.005282217308748, 0.005426447471187], 0.1)
-    else
-        error("Unimplemented")
-    end
-    times_series = [ρ_icu_notsp for i = 1:prm.ncities]
-    for c in [9, 15, 16, 17, 18, 19]
-        times_series[c] = ρ_icu_sp
-    end
+    times_series = [Simple_ARTS(prm.rho_icu_ts[c, :]...) for c in 1:prm.ncities]
 
     m = seir_model(prm, verbosity)
 

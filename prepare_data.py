@@ -20,13 +20,11 @@ print('Loading Robot-dance Julia module... Ok!')
 
 
 def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=7, 
-    need_icu=0.0185, alternate=1.0, window=14, min_level=1.0):
+    alternate=1.0, window=14, min_level=1.0):
     """Save the basic_paramters.csv file using the data used in the report.
 
        All values are optional. If not present the values used in the report wihtout
        an initial hammer phase are used.
-
-       Obs: time_icu and need_icu from https://covid-calc.org/
     """
     basic_prm = pd.Series(dtype=np.float)
     basic_prm["tinc"] = tinc
@@ -34,7 +32,6 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=7,
     basic_prm["rep"] = rep
     basic_prm["ndays"] = ndays
     basic_prm["time_icu"] = time_icu
-    basic_prm["need_icu"] = need_icu
     basic_prm["alternate"] = alternate
     basic_prm["window"] = window
     basic_prm["min_level"] = min_level
@@ -66,8 +63,7 @@ def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
         Julia.tinf = basic_prm["tinf"]
         Julia.rep = basic_prm["rep"]
         Julia.time_icu = basic_prm["time_icu"]
-        Julia.need_icu = basic_prm["need_icu"]
-        Julia.eval('S1, E1, I1, R1, rt = fit_initial(tinc, tinf, rep, time_icu, need_icu, observed_I)')
+        Julia.eval("S1, E1, I1, R1, rt = fit_initial(tinc, tinf, rep, time_icu, observed_I)")
         S1 = Julia.S1
         E1 = Julia.E1
         I1 = Julia.I1

@@ -35,6 +35,13 @@ class SimpleTimeSeries:
         self.reset()
     
 
+    def reset(self):
+        self.t = 0
+        self.theta = []
+        self.Ak = np.array([[1.0, 0], [0, 1]])
+        self.state = (self.initial - self.rhomin) / self.delta
+
+
     def iterate(self, random=False):
         self.t += 1
         self.theta.append(self.Ak[0, 0])
@@ -45,12 +52,34 @@ class SimpleTimeSeries:
         return self.rhomin + self.delta*self.state[0]
 
 
-    def reset(self):
-        self.t = 0
-        self.theta = []
-        self.Ak = np.array([[1.0, 0], [0, 1]])
-        self.state = (self.initial - self.rhomin) / self.delta
+    def simulate(self, horizon, random=False):
+        self.reset()
+        simulation = np.array([self.iterate(random) for i in range(horizon)])
+        return simulation
         
+
+    def get_upper_bound(self, horizon, confidence_level):
+        simulation = self.simulate(horizon)
+        F1p = stats.norm.ppf(confidence_level)
+        upper_bound = simulation[:]
+        theta_norm = np.sqrt(np.cumsum(np.array(self.theta)**2))
+        upper_bound = simulation + F1p*self.sigmaw*self.delta*theta_norm
+            
+        return simulation, upper_bound
+
+
+    def check_upper_bound(self, horizon, confidence_level, n_runs=1000):
+        simulation, upper_bound = self.get_upper_bound(horizon, confidence_level)
+        random_sims = []
+        n_samples = 0
+        n_OK = 0
+        for i in range(n_runs):
+            simulation = self.simulate(horizon, True)
+            random_sims.append(simulation)
+            n_samples += horizon
+            n_OK += (simulation <= upper_bound).sum()
+
+        return n_OK, n_samples
 
 
 # To use PyJulia
@@ -169,6 +198,8 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.i1 = cities_data["I1"].values
     Julia.r1 = cities_data["R1"].values
     Julia.availICU = cities_data["icu_capacity"]
+    Julia.time_icu = basic_prm["time_icu"]
+    Julia.rho_icu_ts = cities_data.iloc[:, 7:-1].values
     Julia.population = population
     Julia.out = mob_matrix["out"].values
     Julia.M = mob_matrix.values[:, :-1]
@@ -187,8 +218,8 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     else:
         Julia.pools = pools
     Julia.eval("""
-        prm = SEIR_Parameters(tinc, tinf, rep, ndays, time_icu, need_icu, alternate, 
-                              s1, e1, i1, r1, availICU, window, out, sparse(M), sparse(Mt))
+        prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate,
+            availICU, time_icu, rho_icu_ts, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
                                       hammer_level, min_level, pools, verbosity, test_budget);
     """)
@@ -203,9 +234,8 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
         """)
 
 def compute_need_icu(ts_parameters, basic_prm):
-    p = 0.1
-    F1p = stats.norm.ppf(1.0 - p)
-    time_series = SimpleTimeSeries(*ts_parameters)
+    F1p = stats.norm.ppf(ts_parameters[-2])
+    time_series = SimpleTimeSeries(*ts_parameters[:-2])
     need_icu = [time_series.iterate() for i in range(int(basic_prm["ndays"]))]
     # TODO: not sure p should be hard coded
     theta = np.array(time_series.theta).copy()
@@ -278,10 +308,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
         i_after_hammer = np.zeros(ncities)
         target_hammer = np.zeros(ncities)
         for c in range(ncities):
-            if c in rmsp:
-                need_icu = need_icu_sp
-            else:
-                need_icu = need_icu_notsp
+            need_icu = compute_need_icu(cities_data.iloc[c, 7:], basic_prm)
 
             target_hammer[c] = 0.7*target.iloc[c][hammer_duration[c] + 1]*cities_data.iloc[c]["icu_capacity"]
             i_after_hammer[c] = basic_prm["time_icu"]*need_icu[hammer_duration[c]]*max(
@@ -515,14 +542,18 @@ def _robot_dance_hammer(t,y,tinc,tinf,ncities,M,out,min_rt,hammer_level,hammer_d
     return dy
 
 
-def save_result(cities_names, filename):
+def save_result(basic_prm, cities_data, target, filename):
     """Save the result of a run for further processing.
     """
+    cities_names = cities_data.index
+    n_cities = len(cities_names)
     Julia.eval("s = value.(m[:s]); e = value.(m[:e]); i = value.(m[:i]); r = value.(m[:r])")
     Julia.eval("rt = expand(value.(m[:rt]), prm)")
+    n = len(Julia.s[0, :])
     Julia.eval("test = value.(m[:test])")
     df = []
-    for i in range(len(cities_names)):
+
+    for i in range(n_cities):
         c = cities_names[i]
         df.append([c, "s"] + list(Julia.s[i, :])) 
         df.append([c, "e"] + list(Julia.e[i, :])) 
@@ -530,13 +561,29 @@ def save_result(cities_names, filename):
         df.append([c, "r"] + list(Julia.r[i, :])) 
         df.append([c, "rt"] + list(Julia.rt[i, :])) 
         df.append([c, "test"] + list(Julia.test[i, :]))
+
+        # Information on ICU
+        icu_capacity = cities_data.loc[c, "population"]*cities_data.loc[c, "icu_capacity"]
+        df.append([c, "icu_capacity"] + list(icu_capacity*np.ones(n)))
+        icu_target = icu_capacity * target.loc[c, :]
+        df.append([c, "target_icu"] + list(icu_target))
+        rho_icu = SimpleTimeSeries(*cities_data.iloc[i, 7:-2])
+        confidence = cities_data.loc[c, "confidence"]
+        mean_icu, upper_icu = rho_icu.get_upper_bound(n, confidence)
+        df.append([c, "mean_rho_icu"] + list(mean_icu))
+        df.append([c, "upper_rho_icu"] + list(upper_icu))
+        mean_icu = cities_data.loc[c, "time_icu"] / basic_prm["tinf"] * mean_icu * cities_data.loc[c, "population"] * Julia.i[i, :]
+        df.append([c, "mean_used_icu"] + list(mean_icu))
+        upper_icu = cities_data.loc[c, "time_icu"] / basic_prm["tinf"] * upper_icu * cities_data.loc[c, "population"] * Julia.i[i, :]
+        df.append([c, "upper_used_icu"] + list(upper_icu))
+
     df = pd.DataFrame(df, columns=["City", "Variable"] + list(range(len(Julia.s[0,:]))))
     df.set_index(["City", "Variable"], inplace=True)
     df.to_csv(filename)
     return df
 
 
-def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, verbosity=0):
+def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, target, verbosity=0):
     """Optimize and save figures and data for further processing.
     """
 
@@ -619,7 +666,7 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, ve
     if verbosity >= 1:
         print('Saving output files...')
     
-    result = save_result(large_cities, data_file)
+    result = save_result(basic_prm, cities_data, target, data_file)
     
     if verbosity >= 1:
         print('Saving output files... Ok!')
@@ -793,7 +840,7 @@ def main():
     prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif, 
         verbosity=verbosity)
     optimize_and_show_results(basic_prm, f"{dir_output}/cmd_res.png", 
-        f"{dir_output}/cmd_res.csv", cities_data.index, verbosity=verbosity)
+        f"{dir_output}/cmd_res.csv", cities_data, target, verbosity=verbosity)
     # check_error_optim(basic_prm, cities_data, mob_matrix, dir_output)
 
 if __name__ == "__main__":
