@@ -189,8 +189,6 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
 
     Julia.tinc = basic_prm["tinc"]
     Julia.tinf = basic_prm["tinf"]
-    Julia.time_icu = basic_prm["time_icu"]
-    Julia.need_icu = basic_prm["need_icu"]
     Julia.alternate = basic_prm["alternate"]
     Julia.rep = basic_prm["rep"]
     Julia.s1 = cities_data["S1"].values
@@ -249,21 +247,6 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
     """Find hammer durations for each city such that the optimization problem will 
     (hopefully) be feasible
     """
-    # TODO: This has to be transformed into parameters
-    rmsp = pool = np.array([9, 15, 16, 17, 18, 19]) - 1
-    if basic_prm["time_icu"] == 7:
-        need_icu_sp = compute_need_icu([0.01099859, 0.02236023, 0.00370254, 0.0, 1.79119571, -0.80552926, 
-            np.sqrt(0.00034005), 0.011644768910252, 0.011221496171591], basic_prm)
-        need_icu_notsp = compute_need_icu([0.0076481, 0.0218084, 0.00367839, 0.0, 1.81361379, -0.82550856, 
-            np.sqrt(8.028E-05), 0.007907216664912, 0.007721801045322], basic_prm)
-    elif basic_prm["time_icu"] == 11:
-        need_icu_sp = compute_need_icu([0.0074335, 0.01523406, -0.00186355, 0.0, 1.67356018, -0.68192908, 
-            np.sqrt(0.00023883), 0.007682840158843, 0.007536060983504], basic_prm)
-        need_icu_notsp = compute_need_icu([0.00520255, 0.01532709, 0.00044498, 0.0, 1.75553282, -0.76360711,
-            np.sqrt(3.567E-05), 0.005426447471187, 0.005282217308748], basic_prm)
-    else:
-        raise NotImplementedError
-
 
     if verbosity >= 1:
         print('Checking if initial hammer is long enough...')
