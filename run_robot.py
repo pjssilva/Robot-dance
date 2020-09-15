@@ -174,7 +174,7 @@ def read_data(options, verbosity=0):
 
 
 def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, 
-    force_dif=1, pools=None, verbosity=0, test_budget=0):
+    force_dif=1, pools=None, verbosity=0, test_budget=0, tests_off=[]):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
@@ -211,6 +211,7 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.verbosity = verbosity
     Julia.window = basic_prm["window"]
     Julia.test_budget = test_budget
+    Julia.tests_off = tests_off
     if pools is None:
         Julia.eval("pools = [[c] for c in 1:length(s1)]")
     else:
@@ -219,7 +220,8 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
         prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate,
             availICU, time_icu, rho_icu_ts, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
-                                      hammer_level, min_level, pools, verbosity, test_budget);
+            hammer_level, min_level, pools, verbosity, test_budget,
+                                      tests_off);
     """)
 
     # Check if there is a ramp parameter (delta_rt_max)
@@ -543,7 +545,8 @@ def save_result(basic_prm, cities_data, target, filename):
         df.append([c, "i"] + list(Julia.i[i, :])) 
         df.append([c, "r"] + list(Julia.r[i, :])) 
         df.append([c, "rt"] + list(Julia.rt[i, :])) 
-        df.append([c, "test"] + list(Julia.test[i, :]))
+        df.append([c, "rel. test"] + list(Julia.test[i, :]))
+        df.append([c, "test"] + list(Julia.test[i, :]*cities_data.loc[c, "population"]))
 
         # Information on ICU
         icu_capacity = cities_data.loc[c, "population"]*cities_data.loc[c, "icu_capacity"]
@@ -732,7 +735,7 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         # Get data
         city_name = cities[j]
         i, rt = result.loc[city_name, "i"], result.loc[city_name, "rt"]
-        test = result.loc[city_name, "test"] / (sars_over_cov*i)
+        test = result.loc[city_name, "rel. test"] / (sars_over_cov*i)
         ndays = len(i) - 1
 
         # Prepare figure
@@ -821,7 +824,7 @@ def main():
     find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data, 
         out_file=options.hammer_data, incr_all=True, verbosity=verbosity)
     prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, force_dif, 
-        verbosity=verbosity)
+        tests_off=[], verbosity=verbosity)
     optimize_and_show_results(basic_prm, f"{dir_output}/cmd_res.png", 
         f"{dir_output}/cmd_res.csv", cities_data, target, verbosity=verbosity)
     # check_error_optim(basic_prm, cities_data, mob_matrix, dir_output)

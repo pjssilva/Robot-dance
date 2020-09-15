@@ -485,7 +485,7 @@ time windows.
 """
 function window_control_multcities(prm, population, target, force_difference, 
     hammer_duration=0, hammer=0.89, min_rt=1.0, pools=[[c] for c in 1:prm.ncities],
-    verbosity=0, test_budget=0)
+    verbosity=0, test_budget=0, tests_off=Vector{Int64}())
     @assert sum(mod.(hammer_duration, prm.window)) == 0
 
     # TODO: Define how to make this constant available here and in the definition
@@ -594,21 +594,38 @@ function window_control_multcities(prm, population, target, force_difference,
         test, i = m[:test], m[:i]
         max_pop = maximum(population)
         # Only use the given budget of tests
+        @expression(m, total_tests[d=1:prm.ndays],
+            sum(population[c]*test[c, d] for c = 1:prm.ncities) 
+        )
         @constraint(m, use_test_available,
-            sum(population[c]*sum(test[c, d] for d = 1:prm.ndays) for c = 1:prm.ncities)/max_pop <= test_budget / max_pop
+            sum(total_tests)/max_pop <= test_budget/max_pop
         )
         # Maximal ammount of daily test https://www.saopaulo.sp.gov.br/ultimas-noticias/sp-mira-30-mil-testes-diarios-coronavirus-com-inclusao-exames-privados/
-        max_daily = 50000.0
+        max_daily = 0 # 50000
         if max_daily > 0.0
             @constraint(m, max_day[d=1:prm.ndays],
-                sum(population[c]*test[c, d] for c = 1:prm.ncities) / max_pop <= max_daily / max_pop
+                total_tests[d]/max_pop <= max_daily/max_pop
             )
         end
         @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
             cov_over_sars * test[c, d] <= i[c, d]
         )
-        # turn_off = [1, 2, 3, 6, 8, 10, 13, 15, 16, 17, 18, 20, 21, 22]
-        # @constraint(m, [c=turn_off, d=1:prm.ndays], test[c, d] == 0.0)
+
+        # Disallow test in some regions.
+        for c in tests_off
+            for d = 1:prm.ndays
+                fix(test[c, d], 0.0; force=true)
+            end
+        end 
+
+        # Limit tests to the proportion of infected in the privious day
+        @expression(m, total_infected[d=1:prm.ndays],
+            sum(i[c, d]*population[c] for c = 1:prm.ncities)
+        )
+        @constraint(m, proprional_tests[c=1:prm.ncities, d=2:prm.ndays],
+            test[c, d]*total_infected[d - 1]/max_pop <= i[c, d - 1]*total_tests[d]/max_pop
+        )
+
     else
         test = m[:test]
         for c = 1:prm.ncities, d = 1:prm.ndays
