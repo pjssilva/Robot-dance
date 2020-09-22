@@ -669,7 +669,7 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
     else:
         cities = subset
         
-    max_city_len = np.max([len(c) for c in cities])
+    max_city_len = max(6, np.max([len(c) for c in cities]))
     window = int(basic_prm["window"])
     if start_date is not None:
         start_date = pd.Timestamp(start_date)
@@ -683,6 +683,7 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         max_i[j, 0] = i.max()
         end_hammer = hammer_duration[j] 
         max_i[j, 1] = i.iloc[end_hammer:].max()
+    max_i[:, 0] = max_i[:, 0].max()
                 
     # Create figure    
     fig = plt.figure(figsize=(15, 1*ncities), constrained_layout=False)
@@ -712,7 +713,7 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         ax = plt.subplot(gs[j, 0])
 
         # Plot infected 
-        ax.plot([0, ndays], [max_i[j, 1], max_i[j, 1]], color="k", alpha=0.15)
+        # ax.plot([0, ndays], [max_i[j, 1], max_i[j, 1]], color="k", alpha=0.15)
         ax.plot(i, color="k")
         # # Show the basolute maximal level before hammer
         # if max_i[j, 0] >= 1.2*max_i[j, 1]:
@@ -728,8 +729,8 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         # Set up figure
         ax.set_xticks([])
         ax.set_xticklabels([])
-        ylabel_format = "{{:>{}s}}".format(max_city_len)
-        ax.set_ylabel(ylabel_format.format(city_name), rotation=0, horizontalalignment="left", labelpad=80)
+        ylabel_format = "{{:^{}s}}".format(max_city_len)
+        ax.set_ylabel(ylabel_format.format(city_name), rotation=0, horizontalalignment="left", labelpad=2.5*max_city_len)
         if max_i[j, 0] >= 1.2*max_i[j, 1]:
             # # Show absoltute maximal level before hammer
             # ax.set_yticks(max_i[j, :])
@@ -759,14 +760,14 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
     if start_date is None:
         ax.set_xticks(np.arange(0, ndays, 30))
     else:
-        ticks = pd.date_range(start_date, start_date + ndays*pd.to_timedelta("1D"), freq="1MS")
+        ticks = pd.date_range(start_date, start_date + ndays*pd.to_timedelta("1D"), freq="2MS")
         ticks = list(ticks)
         if ticks[0] <= start_date + pd.to_timedelta("10D"):
             ticks[0] = start_date
         else:
             ticks = [start_date] + ticks
         ax.set_xticks([(i - start_date).days for i in ticks])
-        labels = [i.strftime('%d/%m/%Y') for i in ticks]
+        labels = [i.strftime('%m/%Y') for i in ticks]
         ax.set_xticklabels(labels, rotation=45, ha='right')
 
     
