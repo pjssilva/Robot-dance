@@ -688,7 +688,7 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
     else:
         cities = subset
         
-    max_city_len = np.max([len(c) for c in cities])
+    max_city_len = max(6, np.max([len(c) for c in cities]))
     window = int(basic_prm["window"])
     if start_date is not None:
         start_date = pd.Timestamp(start_date)
@@ -702,9 +702,11 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         max_i[j, 0] = i.max()
         end_hammer = hammer_duration[j] 
         max_i[j, 1] = i.iloc[end_hammer:].max()
+    max_i[:, 0] = max_i[:, 0].max()
                 
     # Create figure    
     fig = plt.figure(figsize=(15, 1*ncities), constrained_layout=False)
+
     gs = gridspec.GridSpec(ncities, 2, height_ratios=max_i[:, 0], width_ratios=[0.82, 0.18],
         hspace=0, wspace=0)
     # Colors for rt
@@ -742,7 +744,7 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         ax = plt.subplot(gs[j, 0])
 
         # Plot infected 
-        ax.plot([0, ndays], [max_i[j, 1], max_i[j, 1]], color="k", alpha=0.15)
+        # ax.plot([0, ndays], [max_i[j, 1], max_i[j, 1]], color="k", alpha=0.15)
         ax.plot(i, color="k")
         # # Show the absolute maximal level before hammer
         # if max_i[j, 0] >= 1.2*max_i[j, 1]:
@@ -765,8 +767,8 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         # Set up figure
         ax.set_xticks([])
         ax.set_xticklabels([])
-        ylabel_format = "{{:>{}s}}".format(max_city_len)
-        ax.set_ylabel(ylabel_format.format(city_name), rotation=0, horizontalalignment="left", labelpad=80)
+        ylabel_format = "{{:^{}s}}".format(max_city_len)
+        ax.set_ylabel(ylabel_format.format(city_name), rotation=0, horizontalalignment="left", labelpad=2.5*max_city_len)
         if max_i[j, 0] >= 1.2*max_i[j, 1]:
             # # Show absoltute maximal level before hammer
             # ax.set_yticks(max_i[j, :])

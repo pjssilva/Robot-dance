@@ -158,7 +158,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     return cities_data
 
 
-def convert_mobility_matrix_and_save(cities_data, max_neighbors, drs=False):
+def convert_mobility_matrix_and_save(cities_data, max_neighbors, drs=None):
     """Read the mobility matrix data given by Pedro and save it in the format needed by
        robot_dance.
 
@@ -167,8 +167,8 @@ def convert_mobility_matrix_and_save(cities_data, max_neighbors, drs=False):
     """
     # Read the mobility_matrix
     large_cities = cities_data.index
-    if drs:
-        mobility_matrix = pd.read_csv("data/drs_mobility.csv", index_col=0)
+    if drs is not None:
+        mobility_matrix = pd.read_csv(drs, index_col=0)
         mobility_matrix = mobility_matrix.loc[large_cities, large_cities].T
         mobility_matrix = mobility_matrix.mask(
             mobility_matrix.rank(axis=1, method='min', ascending=False) > max_neighbors + 1, 0
