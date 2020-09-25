@@ -6,3 +6,5 @@ ipopt*
 __pycache__
 results
 move_mat_SÃO PAULO_SP-Municipios_reg_names.txt
+playground.ipynb
+data/retrieve_data/

@@ -681,6 +681,8 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
     """
     # TODO: Put this constant out
     sars_over_cov = 4.0
+    sick_tested = 0.4
+    sars_over_cov *= sick_tested/basic_prm["tinf"]
     
     # Get data
     if subset is None:
@@ -725,12 +727,12 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
         ax.legend(handles=legend_elements, loc='upper right')
         ax.set_axis_off()
     else:
-        n_values = int(100*sars_over_cov) + 1 
-        values = sars_over_cov*plt.linspace(1, 0, n_values) 
-        ax.imshow(values.reshape(n_values, 1), cmap=test_colors, aspect=0.05, alpha=0.7) 
+        n_values = 200 + 1
+        values = sars_over_cov*plt.linspace(1, 0, n_values)
+        ax.imshow(values.reshape(n_values, 1), cmap=test_colors, aspect=0.1, alpha=0.7) 
         ax.set_xticks([]) 
         ax.set_yticks(plt.arange(0, n_values, 50)) 
-        ax.set_yticklabels(values[::50]) 
+        ax.set_yticklabels([f"{v:.2f}" for v in values[::50]]) 
         ax.yaxis.tick_right() 
 
     for j in range(ncities):

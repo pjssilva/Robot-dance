@@ -206,17 +206,14 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
     @variable(m, 0.0 <= s[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= e[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= i[1:prm.ncities, 1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= q[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= r[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= test[1:prm.ncities, 1:prm.ndays] <= 1.0)
 
     # Constants that define the testing impact
     # TODO: These values should be paramters
-    tau = 5
-    cov_over_sars = 0.25
-    test_const = 0.2*cov_over_sars * exp(-tau / (tau + prm.tinf))
-
-    # Effective I for the dynamics
-    @expression(m, itest[c=1:prm.ncities, d=1:prm.ndays], i[c, d] - test_const*test[c, d])
+    # 1/4 of the tests are from Covid-19
+    test_const = 1/4
 
     # Control variable
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
@@ -247,10 +244,12 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
 
     if FIXED_I > 0
         @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays],
-            1.0 - FIXED_I*itest[c, t]
+            1.0 - FIXED_I*i[c, t] - q[c, t]
         )
     else
-        @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays], 1.0)
+        @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays], 
+            1.0 - q[c, t]
+        )
     end
 
     @expression(m, alt_out[c=1:prm.ncities, d=1:prm.window:prm.ndays],
@@ -273,8 +272,8 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
     # i_eff_p_c denotes the proportion of the effective number of infected at city c
     # during the day divided by the original population of city c
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        i_eff_p_c[c, t] == (1.0 - alt_out[c, mapind(t, prm)]*CAN_TRAVEL_I)*itest[c, t] +
-            sum(dest_orig[c, k, mapind(t, prm)]*CAN_TRAVEL_I*itest[k, t] for k in coli_M[c])
+        i_eff_p_c[c, t] == (1.0 - alt_out[c, mapind(t, prm)]*CAN_TRAVEL_I)*i[c, t] +
+            sum(dest_orig[c, k, mapind(t, prm)]*CAN_TRAVEL_I*i[k, t] for k in coli_M[c])
     )
     # i_eff is the effective ratio of inffected in city c
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays], 
@@ -287,7 +286,7 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
     )
 
     @constraint(m, [c=1:prm.ncities, t=1:prm.ndays],
-        rti[c, t] == rt[c, mapind(t, prm)]*itest[c, t]
+        rti[c, t] == rt[c, mapind(t, prm)]*i[c, t]
     )
     
     # Parameter that measures how much important is the infection during the day
@@ -320,17 +319,21 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
         -ds[c, t] - (1.0/prm.tinc)*e[c,t]
     )
     @expression(m, di[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0/prm.tinc)*e[c, t] - (1.0/prm.tinf)*i[c, t]
+        (1.0/prm.tinc)*e[c, t] - (1.0/prm.tinf)*(i[c, t] + test_const*test[c, t])
+    )
+    # TODO: add a Tq in prm?
+    tq = 3*prm.tinf
+    @expression(m, dq[c=1:prm.ncities, t=1:prm.ndays],
+        test_const/prm.tinf*test[c, t] - 1.0/tq*q[c, t]
     )
     @expression(m, dr[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0/prm.tinf)*i[c, t]
+        1/tq*q[c, t] + (1.0/prm.tinf)*i[c, t]
     )
     if verbosity >= 1
         println("Defining SEIR equations... Ok!")
     end
 
     discr_method = "finite_difference"
-    #discr_method = "heun"
     k_curr_t = 0.5
     k_prev_t = 0.5
 
@@ -354,6 +357,9 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
         )
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
             i[c, t] == i[c, t - 1] + (k_prev_t*di[c, t-1] + k_curr_t*di[c, t])*dt
+        )
+        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+            q[c, t] == q[c, t - 1] +dq[c, t - 1]*dt #+ (k_prev_t*dq[c, t-1] + k_curr_t*dq[c, t])*dt
         )
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
             r[c, t] == r[c, t - 1] + (k_prev_t*dr[c, t-1] + k_curr_t*dr[c, t])*dt
@@ -428,13 +434,14 @@ function fit_initial(tinc, tinf, rep, time_icu, data, ttv_weight=0.25)
     m = seir_model_with_free_initial_values(prm)
 
     # Initial state
-    s1, e1, i, r1, rt, test = m[:s][1, 1], m[:e][1, 1], m[:i], m[:r][1, 1], m[:rt], m[:test]
+    s1, e1, i, q, r1, rt, test = m[:s][1, 1], m[:e][1, 1], m[:i], m[:q], m[:r][1, 1], m[:rt], m[:test]
     set_start_value(r1, prm.r1[1])
     set_start_value(s1, prm.s1[1])
     set_start_value(e1, prm.e1[1])
     set_start_value(i[1, 1], prm.i1[1])
     for c =1:prm.ncities, d=1:prm.ndays
         fix(test[c, d], 0.0; force=true)
+        fix(q[c, d], 0.0; force=true)
     end
 
     # Define upper bounds on rt
@@ -490,7 +497,8 @@ function window_control_multcities(prm, population, target, force_difference,
 
     # TODO: Define how to make this constant available here and in the definition
     # of the model.
-    cov_over_sars = 0.25
+    sars_over_cov = 4
+    sick_tested = 0.4
 
     # TODO: These should be parameters - first try
     times_series = [Simple_ARTS(prm.rho_icu_ts[c, :]...) for c in 1:prm.ncities]
@@ -554,29 +562,29 @@ function window_control_multcities(prm, population, target, force_difference,
             V[p, d] == prm.time_icu/prm.tinf*sum(population[c]*i[c, d] for c in pool) / pool_population[p]
         )
 
-    # # Entering in R
+        # # Entering in R
         # TODO: adapt to use pools
-    # firstday = max.(2, hammer_duration .+ 1)
-    # r = m[:r]
-    # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
-    # # As in the paper, V represents the number of people that will leave
-    # # infected and potentially go to ICU.
-    # @variable(m, sqV[c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu] >= 0)
-    # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
-    #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
-    # )
+        # firstday = max.(2, hammer_duration .+ 1)
+        # r = m[:r]
+        # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
+        # # As in the paper, V represents the number of people that will leave
+        # # infected and potentially go to ICU.
+        # @variable(m, sqV[c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu] >= 0)
+        # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
+        #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
+        # )
         #println()
         for d in 1:prm.ndays - prm.time_icu
             Eicu, safety_level = iterate(ρ_icu)
             if d >= first_pool_day[p]
-                @constraint(m, 
+                @constraint(m,
                     (Eicu + safety_level)*V[p, d] <= 
                     sum(target[c, d]*population[c]*prm.availICU[c] for c in pool) / pool_population[p]
                 )
             end
             #println(Eicu, " ", F1p*σω*Δ*sqrt(sumΘ2), " ", Eicu + F1p*σω*Δ*sqrt(sumΘ2))
             #println("$F1p $σω $Δ $(sqrt(sumΘ2))")
-            end
+        end
     end
 
     # # Simple form that is based only on the upper bound and means.
@@ -608,7 +616,7 @@ function window_control_multcities(prm, population, target, force_difference,
             )
         end
         @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
-            cov_over_sars * test[c, d] <= i[c, d]
+            test[c, d] <= sars_over_cov * sick_tested * i[c, d] / prm.tinf
         )
 
         # Disallow test in some regions.
@@ -618,13 +626,13 @@ function window_control_multcities(prm, population, target, force_difference,
             end
         end 
 
-        # Limit tests to the proportion of infected in the privious day
-        @expression(m, total_infected[d=1:prm.ndays],
-            sum(i[c, d]*population[c] for c = 1:prm.ncities)
-        )
-        @constraint(m, proprional_tests[c=1:prm.ncities, d=2:prm.ndays],
-            test[c, d]*total_infected[d - 1]/max_pop <= i[c, d - 1]*total_tests[d]/max_pop
-        )
+        # # Limit tests to the proportion of infected in the privious day
+        # @expression(m, total_infected[d=1:prm.ndays],
+        #     sum(i[c, d]*population[c] for c = 1:prm.ncities)
+        # )
+        # @constraint(m, proprional_tests[c=1:prm.ncities, d=2:prm.ndays],
+        #     test[c, d]*total_infected[d - 1]/max_pop <= i[c, d - 1]*total_tests[d]/max_pop
+        # )
 
     else
         test = m[:test]
@@ -633,7 +641,7 @@ function window_control_multcities(prm, population, target, force_difference,
         end
     end
     
-    
+
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
     end
