@@ -1,5 +1,14 @@
 # Robot Dance
 
+## Warning
+
+The code is passing through a clean up after the submission of the manuscript.
+Once you download the data and add the dependencies (see below), it should be
+possible to reproduce the manuscript experiments by running the
+`manuscript_experiments.ipynb` notebook.
+
+##
+
 This repository contains the code used in the manuscript 
 [Robot dance: a city-wise automatic control of Covid-19 mitigation levels](https://www.medrxiv.org/content/10.1101/2020.05.11.20098541v1).
 
