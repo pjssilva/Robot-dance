@@ -2,15 +2,24 @@
 
 ## Warning
 
-The code is passing through a clean up after the submission of the manuscript.
-Once you download the data and add the dependencies (see below), it should be
-possible to reproduce the manuscript experiments by running the
-`manuscript_experiments.ipynb` notebook.
+The code is passing through a clean up after the submission of the manuscripts.
+
+In order to reproduce the manuscripts experiments you should download the 
+respective tag:
+
+* `m1.X`: For the manuscript on using optimization techniques to design
+  distancing profiles under a multiregion setting. To reproduce the experiments,
+  run the `manuscript_experiments.ipynb` notebook.
+
+* `m2.X`: For the new version of the code that incorporate testing. To reproduce
+  the experiments, run the `test_control_test.ipynb` notebook.
+
+It should possible to run the test once you  add the dependencies (see below).
 
 ##
 
 This repository contains the code used in the manuscript 
-[Robot dance: a city-wise automatic control of Covid-19 mitigation levels](https://www.medrxiv.org/content/10.1101/2020.05.11.20098541v1).
+[Robot Dance: a mathematical optimization platform for intervention against Covid-19 in a complex network](http://www.optimization-online.org/DB_HTML/2020/10/8054.html).
 
 The idea is to sue control and optimization to design efficient alternate mitigation
 strategies for Covid-19 and other infectious diseases. It uses an adapted SEIR model that
@@ -131,7 +140,7 @@ the code in order to overcome these limitations.
 
 ## Copyright 
 
-Copyright Paulo J. S. Silva e Luis Gustavo Nonato. See the [license file](LICENSE.md).
+Copyright Paulo J. S. Silva, Luis Gustavo Nonato, and Marcelo Córdova. See the [license file](LICENSE.md).
 
 ## Funding
 
@@ -143,7 +152,6 @@ We provide this code hoping that it will be useful for others. Please if you use
 know about you experiences. Moreover, if you use this code in any publication, please cite
 us. This is very important. For the moment we only have the manuscript, so cite it as
 
-Silva, Paulo J. S., Pereira, Tiago and Nonato, Luis Gustavo. "Robot dance: a city-wise
-automatic control of Covid-19 mitigation levels". Medrxiv, 2020.
-[doi:https://doi.org/10.1101/2020.05.11.20098541]
-
+Nonato, L. G; Peixoto, P.; Pereira, T.; Sagastizabal, C.; Silva, P. J. S. "Robot
+Dance: a mathematical optimization platform for intervention against Covid-19 in
+a complex network". [Optimizatin Online, 2020.](http://www.optimization-online.org/DB_HTML/2020/10/8054.html) 
