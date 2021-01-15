@@ -154,4 +154,4 @@ us. This is very important. For the moment we only have the manuscript, so cite 
 
 Nonato, L. G; Peixoto, P.; Pereira, T.; Sagastizabal, C.; Silva, P. J. S. "Robot
 Dance: a mathematical optimization platform for intervention against Covid-19 in
-a complex network". [Optimizatin Online, 2020.](http://www.optimization-online.org/DB_HTML/2020/10/8054.html) 
+a complex network". [Optimization Online, 2020.](http://www.optimization-online.org/DB_HTML/2020/10/8054.html) 
