@@ -13,6 +13,8 @@ using Printf
 using LinearAlgebra
 using SparseArrays
 using Distributions
+using DataFrames
+using CSV
 import Statistics.mean
 include("simple_arts.jl")
 
@@ -390,8 +392,9 @@ function seir_model(prm, verbosity, tau=3, test_efficacy=0.8)
         fix(s1[c], prm.s1[c]; force=true)
         fix(e1[c], prm.e1[c]; force=true)
         fix(i1[c], prm.i1[c]; force=true)
-        fix(q1[c], 0.0; force=true)
         fix(r1[c], prm.r1[c]; force=true)
+        sum = prm.s1[c] + prm.e1[c] + prm.i1[c] + prm.r1[c]
+        fix(q1[c], max(0.0, 1.0 - sum); force=true)
     end
     return m
 end
@@ -503,6 +506,13 @@ function window_control_multcities(prm, population, target, force_difference,
     sars_over_cov = 4
     sick_tested = 0.4
 
+    # Define the variation that will run: pure_robot, rt from pure robot + optimal tests
+    # or rt from pure robot up to day saturation and from there own tests only
+    # This is obviously a hack to automate the run.
+    has_rt = isfile("results/pure_robot.csv")
+    has_opt = isfile("results/opt_tests_budget_2000000000_daily_200000_tau_3_test_ef_0.800000.csv")
+    saturation_day = 140
+
     # TODO: These should be parameters - first try
     times_series = [Simple_ARTS(prm.rho_icu_ts[c, :]...) for c in 1:prm.ncities]
 
@@ -511,20 +521,37 @@ function window_control_multcities(prm, population, target, force_difference,
     if verbosity >= 1
         println("Setting limits for rt...")
     end
-    # Fix rt during hammer phase
     rt = m[:rt]
-    for c = 1:prm.ncities, d = 1:prm.window:hammer_duration[c]
-        fix(rt[c, d], hammer[c]; force=true)
-    end
-    
-    # Set the minimum rt achievable after the hammer phase.
-    for c = 1:prm.ncities, d = hammer_duration[c] + 1:prm.window:prm.ndays
-        set_lower_bound(rt[c, d], min_rt)
+
+    if has_rt
+        pure_robot_data = DataFrame(CSV.File("results/pure_robot.csv"))
+        pure_robot_rt = pure_robot_data[pure_robot_data.Variable .== "rt", :]
+        if has_opt
+            for c = 1:prm.ncities, d = 1:prm.window:saturation_day
+                fix(rt[c, d], pure_robot_rt[c, d + 2]; force=true)
+            end
+            for c = 1:prm.ncities, d = saturation_day + 1:prm.window:prm.ndays
+                fix(rt[c, d], 1.8; force=true)
+            end            
+        else    
+            for c = 1:prm.ncities, d = 1:prm.window:prm.ndays
+                fix(rt[c, d], pure_robot_rt[c, d + 2]; force=true)
+            end
+        end
+    else
+        # Fix rt during hammer phase
+        for c = 1:prm.ncities, d = 1:prm.window:hammer_duration[c]
+            fix(rt[c, d], hammer[c]; force=true)
+        end
+        
+        # Set the minimum rt achievable after the hammer phase.
+        for c = 1:prm.ncities, d = hammer_duration[c] + 1:prm.window:prm.ndays
+            set_lower_bound(rt[c, d], min_rt)
+        end
     end
     if verbosity >= 1
         println("Setting limits for rt... Ok!")
     end
-
     # Bound the maximal infection rate using a chance constraint
     # Bound the maximal infection rate taking into account the maximal ICU rooms available.
     # Some configuration parameters got from https://covid-calc.org/
@@ -579,7 +606,7 @@ function window_control_multcities(prm, population, target, force_difference,
         #println()
         for d in 1:prm.ndays - prm.time_icu
             Eicu, safety_level = iterate(ρ_icu)
-            if d >= first_pool_day[p]
+            if d >= first_pool_day[p] && (!has_rt)
                 @constraint(m,
                     (Eicu + safety_level)*V[p, d] <= 
                     sum(target[c, d]*population[c]*prm.availICU[c] for c in pool) / pool_population[p]
@@ -604,6 +631,14 @@ function window_control_multcities(prm, population, target, force_difference,
     if test_budget > 0
         test, i = m[:test], m[:i]
         max_pop = maximum(population)
+
+        # If this is the trunc variation, prohibits tests before saturation day.
+        if has_opt
+            for c = 1:prm.ncities, d = 1:saturation_day
+                fix(test[c, d], 0.0; force=true)
+            end
+        end
+
         # Only use the given budget of tests
         @expression(m, total_tests[d=1:prm.ndays],
             sum(population[c]*test[c, d] for c = 1:prm.ncities) 
@@ -661,31 +696,36 @@ function window_control_multcities(prm, population, target, force_difference,
         dif_matrix[c, d] = force_difference[c, d] / mean_population / (2*prm.ncities)
     end
     # Define objective
-    @objective(m, Min,
-        # Try to keep as many people working as possible
-        prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
-        # Estimula o bang-bang
-        0.02*prm.alternate*prm.window*sum(
-            force_difference[c, d]*effect_pop[c]/mean_population*
-            (prm.rep - rt[c, d])*(min_rt - rt[c, d])
-            for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
-        # Try to alternate within a single city.
-        0.5*prm.alternate*prm.window/(prm.rep^2)*sum(
-            force_difference[c, d]*(rt[c, d] - rt[c, d - prm.window])^2 
-            for c = 1:prm.ncities 
-            for d = hammer_duration[c] + prm.window + 1:prm.window:prm.ndays
-        ) -
-        # Try to enforce different cities to alternate the controls
-        0.5*prm.alternate*prm.window/(prm.rep^2)*sum(
-            minimum((effect_pop[c], effect_pop[cl]))*
-            minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
-            (rt[c, d] - rt[cl, d])^2
-            for c = 1:prm.ncities 
-            for cl = c + 1:prm.ncities 
-            for d = hammer_duration[c] + 1:prm.window:prm.ndays
+    if has_rt
+        s = m[:s]
+        @objective(m, Min, 1.0/mean_population*sum((1.0 - s[c, prm.ndays])*population[c] for c = 1:prm.ncities))
+    else
+        @objective(m, Min,
+            # Try to keep as many people working as possible
+            prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
+                for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
+            # Estimula o bang-bang
+            0.02*prm.alternate*prm.window*sum(
+                force_difference[c, d]*effect_pop[c]/mean_population*
+                (prm.rep - rt[c, d])*(min_rt - rt[c, d])
+                for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
+            # Try to alternate within a single city.
+            0.5*prm.alternate*prm.window/(prm.rep^2)*sum(
+                force_difference[c, d]*(rt[c, d] - rt[c, d - prm.window])^2 
+                for c = 1:prm.ncities 
+                for d = hammer_duration[c] + prm.window + 1:prm.window:prm.ndays
+            ) -
+            # Try to enforce different cities to alternate the controls
+            0.5*prm.alternate*prm.window/(prm.rep^2)*sum(
+                minimum((effect_pop[c], effect_pop[cl]))*
+                minimum((dif_matrix[c, d], dif_matrix[cl, d]))*
+                (rt[c, d] - rt[cl, d])^2
+                for c = 1:prm.ncities 
+                for cl = c + 1:prm.ncities 
+                for d = hammer_duration[c] + 1:prm.window:prm.ndays
+            )
         )
-    )
+    end
     if verbosity >= 1
         println("Computing objective function... Ok!")
     end
