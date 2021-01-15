@@ -174,7 +174,8 @@ def read_data(options, verbosity=0):
 
 
 def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, 
-    force_dif=1, pools=None, verbosity=0, test_budget=0, tests_off=[]):
+    force_dif=1, pools=None, verbosity=0, test_budget=0, tests_off=[], 
+    tau=3, test_efficacy=0.8, daily_tests=0, proportional_tests=False):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
@@ -212,6 +213,10 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.window = basic_prm["window"]
     Julia.test_budget = test_budget
     Julia.tests_off = tests_off
+    Julia.tau = tau
+    Julia.test_efficacy = test_efficacy
+    Julia.daily_tests = daily_tests
+    Julia.proportional_tests = proportional_tests
     if pools is None:
         Julia.eval("pools = [[c] for c in 1:length(s1)]")
     else:
@@ -220,8 +225,8 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
         prm = SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate,
             availICU, time_icu, rho_icu_ts, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
-            hammer_level, min_level, pools, verbosity, test_budget,
-                                      tests_off);
+            hammer_level, min_level, pools, verbosity, test_budget, tests_off,
+            tau, test_efficacy, daily_tests, proportional_tests);
     """)
 
     # Check if there is a ramp parameter (delta_rt_max)
@@ -638,7 +643,7 @@ def optimize_and_show_results(basic_prm, figure_file, data_file, cities_data, ta
     stats["Closed"] = total
     stats["Mean closed"] = mean
 
-    if verbosity >= 1:
+    if verbosity >= 2:
         print()
         print("Statistics")
         print(stats)
@@ -803,14 +808,14 @@ def plot_result(basic_prm, result, figure_file, hammer_duration, start_date=None
     if start_date is None:
         ax.set_xticks(np.arange(0, ndays, 30))
     else:
-        ticks = pd.date_range(start_date, start_date + ndays*pd.to_timedelta("1D"), freq="1MS")
+        ticks = pd.date_range(start_date, start_date + ndays*pd.to_timedelta("1D"), freq="2MS")
         ticks = list(ticks)
         if ticks[0] <= start_date + pd.to_timedelta("10D"):
             ticks[0] = start_date
         else:
             ticks = [start_date] + ticks
         ax.set_xticks([(i - start_date).days for i in ticks])
-        labels = [i.strftime('%d/%m/%Y') for i in ticks]
+        labels = [i.strftime('%m/%Y') for i in ticks]
         ax.set_xticklabels(labels, rotation=45, ha='right')
 
     
