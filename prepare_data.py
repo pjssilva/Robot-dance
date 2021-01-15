@@ -39,7 +39,7 @@ def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=7,
     return basic_prm
 
 
-def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
+def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0, tests=np.zeros(0)):
     """Fits data and define initial contidions of the SEIR model in the last day.
     """
     population = city_data["estimated_population_2019"].iloc[0]
@@ -49,7 +49,7 @@ def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
     new_cases = confirmed.values[1:] - confirmed.values[:-1]
 
     # Use a mean in a week to smooth the data (specially to deal with weekends)
-    observed_I = np.convolve(new_cases, np.ones(7, dtype=int), 'valid') / 7.0
+    observed_I = np.convolve(new_cases, np.ones(14, dtype=int), 'valid') / 14.0
 
     # Now accumulate in the inf_window
     inf_window = int(round(basic_prm["tinf"]))
@@ -63,20 +63,22 @@ def initial_conditions(basic_prm, city_data, min_days, Julia, correction=1.0):
         Julia.tinf = basic_prm["tinf"]
         Julia.rep = basic_prm["rep"]
         Julia.time_icu = basic_prm["time_icu"]
-        Julia.eval("S1, E1, I1, R1, rt = fit_initial(tinc, tinf, rep, time_icu, observed_I)")
-        S1 = Julia.S1
-        E1 = Julia.E1
-        I1 = Julia.I1
-        R1 = Julia.R1
+        Julia.tests = tests
+        Julia.eval("S, E, II, R, rt = fit_initial(tinc, tinf, rep, time_icu, observed_I, 0.25, tests)")
+        S = Julia.S
+        E = Julia.E
+        I = Julia.II
+        R = Julia.R
         rt = np.array(Julia.rt)
-        return (S1, E1, I1, R1, ndays), rt, observed_I, population
+        return S, E, I, R, ndays, rt, observed_I, population
     else:
         raise ValueError("Not enough data for %s only %d days available" % 
             (city_data["city"].iloc[0], len(observed_I)))
 
 
 def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, min_pop, 
-    correction, verbose=0, raw_name="data/covid_with_cities.csv"):
+    correction, verbose=0, raw_name="data/covid_with_cities.csv", t0_day="2020-04-15",
+    tests=np.zeros(0)):
     """Compute the initial conditions and population and save it to data/cities_data.csv.
 
     The population and initial condition is estimated  from a file with the information on
@@ -125,8 +127,10 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
         city_name = large_cities[i]
         try:
             city_data = epi_data[epi_data["city"] == city_name]
-            parameters[city_name], rt, observed_I, city_pop = initial_conditions(basic_prm, 
-                city_data, min_days, Julia, correction)
+            S, E, I, R, ndays, rt, observed_I, city_pop = initial_conditions(basic_prm, 
+                city_data, min_days, Julia, correction, tests)
+            t0_index = np.where(city_data["date"].values == t0_day)[0][0] - len(city_data["date"])
+            parameters[city_name] = (S[t0_index], E[t0_index], I[t0_index], R[t0_index], ndays)
             population.append(city_pop)
             icu_capacity.append(city_data["icu_capacity"].iloc[0])
             if verbose > 0:
@@ -155,7 +159,7 @@ def compute_initial_condition_evolve_and_save(basic_prm, state, large_cities, mi
     cities_data["icu_capacity"] = icu_capacity
     cities_data["start_date"] = epi_data["date"].max()
     cities_data.to_csv(path.join("data", "cities_data.csv"))
-    return cities_data
+    return cities_data, rt[t0_index:]
 
 
 def convert_mobility_matrix_and_save(cities_data, max_neighbors, drs=None):

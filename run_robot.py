@@ -175,7 +175,8 @@ def read_data(options, verbosity=0):
 
 def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data, 
     force_dif=1, pools=None, verbosity=0, test_budget=0, tests_off=[], 
-    tau=3, test_efficacy=0.8, daily_tests=0, proportional_tests=False):
+    tau=3, test_efficacy=0.8, daily_tests=0, proportional_tests=False, 
+    tests=np.zeros(0), fixed_rt=np.zeros(0)):
     ncities, ndays = len(cities_data.index), int(basic_prm["ndays"])
     if force_dif is 1:
         force_dif = np.ones((ncities, ndays))
@@ -217,6 +218,14 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
     Julia.test_efficacy = test_efficacy
     Julia.daily_tests = daily_tests
     Julia.proportional_tests = proportional_tests
+    if len(tests) > 0:
+        Julia.tests = tests
+    else:
+        Julia.eval("tests = Float64[]")
+    if len(fixed_rt) > 0:
+        Julia.fixed_rt = fixed_rt
+    else:
+        Julia.eval("fixed_rt = Float64[]")
     if pools is None:
         Julia.eval("pools = [[c] for c in 1:length(s1)]")
     else:
@@ -226,7 +235,7 @@ def prepare_optimization(basic_prm, cities_data, mob_matrix, target, hammer_data
             availICU, time_icu, rho_icu_ts, window, out, sparse(M), sparse(Mt))
         m = window_control_multcities(prm, population, target, force_dif, hammer_duration, 
             hammer_level, min_level, pools, verbosity, test_budget, tests_off,
-            tau, test_efficacy, daily_tests, proportional_tests);
+            tau, test_efficacy, daily_tests, proportional_tests, tests, fixed_rt);
     """)
 
     # Check if there is a ramp parameter (delta_rt_max)
@@ -263,7 +272,7 @@ def find_feasible_hammer(basic_prm, cities_data, mob_matrix, target, hammer_data
     out = mob_matrix["out"].values
 
     tspan = (0,ndays)
-    teval = np.arange(0, ndays + 0.01, 1) # 1 day discretization
+    teval = np.arange(0, ndays+0.01, 1) # 1 day discretization
     y0 = cities_data["S1"].values
     y0 = np.append(y0, cities_data["E1"].values)
     y0 = np.append(y0, cities_data["I1"].values)
@@ -537,7 +546,8 @@ def save_result(basic_prm, cities_data, target, filename):
     """
     cities_names = cities_data.index
     n_cities = len(cities_names)
-    Julia.eval("s = value.(m[:s]); e = value.(m[:e]); i = value.(m[:i]); r = value.(m[:r])")
+    Julia.eval("s = value.(m[:s]); e = value.(m[:e]); i = value.(m[:i]);")
+    Julia.eval("q = value.(m[:q]); r = value.(m[:r])")
     Julia.eval("rt = expand(value.(m[:rt]), prm)")
     n = len(Julia.s[0, :])
     Julia.eval("test = value.(m[:test])")
@@ -548,6 +558,7 @@ def save_result(basic_prm, cities_data, target, filename):
         df.append([c, "s"] + list(Julia.s[i, :])) 
         df.append([c, "e"] + list(Julia.e[i, :])) 
         df.append([c, "i"] + list(Julia.i[i, :])) 
+        df.append([c, "q"] + list(Julia.q[i, :])) 
         df.append([c, "r"] + list(Julia.r[i, :])) 
         df.append([c, "rt"] + list(Julia.rt[i, :])) 
         df.append([c, "rel. test"] + list(Julia.test[i, :]))
