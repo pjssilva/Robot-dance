@@ -19,7 +19,7 @@ Julia.eval('include("robot_dance.jl")')
 print('Loading Robot-dance Julia module... Ok!')
 
 
-def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=7,
+def save_basic_parameters(tinc=5.2, tinf=2.9, rep=2.5, ndays=400, time_icu=7, 
     alternate=1.0, window=14, min_level=1.0):
     """Save the basic_paramters.csv file using the data used in the report.
 

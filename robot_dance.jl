@@ -172,7 +172,7 @@ Build an optimization model with the SEIR discretization as constraints. The ini
 parameters are not initialized and remain free. This can be useful, for example, to fit the
 initial parameters to observed data.
 """
-function seir_model_with_free_initial_values(prm, verbosity=0)
+function seir_model_with_free_initial_values(prm, verbosity=0, tau=3, test_efficacy=0.8)
     # Save work and get col indices of both M and Mt
     coli_M = [findnz(prm.M[:,c])[1] for c in 1:prm.ncities]
     coli_Mt = [findnz(prm.Mt[:,c])[1] for c in 1:prm.ncities]
@@ -206,7 +206,15 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
     @variable(m, 0.0 <= s[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= e[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= i[1:prm.ncities, 1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= q[1:prm.ncities, 1:prm.ndays] <= 1.0)
     @variable(m, 0.0 <= r[1:prm.ncities, 1:prm.ndays] <= 1.0)
+    @variable(m, 0.0 <= test[1:prm.ncities, 1:prm.ndays] <= 1.0)
+
+    # Constants that define the testing impact
+    # TODO: These values should be paramters
+    # 1/4 of the tests are from Covid-19
+    sars_over_cov = 4
+    test_const = 1/sars_over_cov*test_efficacy*exp(-tau/prm.tinf)
 
     # Control variable
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
@@ -237,10 +245,12 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
 
     if FIXED_I > 0
         @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays],
-            1.0 - FIXED_I*i[c, t]
+            1.0 - FIXED_I*i[c, t] - q[c, t]
         )
     else
-        @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays], 1.0)
+        @expression(m, can_travel[c=1:prm.ncities, t=1:prm.ndays], 
+            1.0 - q[c, t]
+        )
     end
 
     @expression(m, alt_out[c=1:prm.ncities, d=1:prm.window:prm.ndays],
@@ -310,17 +320,21 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
         -ds[c, t] - (1.0/prm.tinc)*e[c,t]
     )
     @expression(m, di[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0/prm.tinc)*e[c, t] - (1.0/prm.tinf)*i[c, t]
+        (1.0/prm.tinc)*e[c, t] - (1.0/prm.tinf)*(i[c, t] + test_const*test[c, t])
+    )
+    # TODO: add a Tq in prm?
+    tq = 3*prm.tinf
+    @expression(m, dq[c=1:prm.ncities, t=1:prm.ndays],
+        test_const/prm.tinf*test[c, t] - 1.0/tq*q[c, t]
     )
     @expression(m, dr[c=1:prm.ncities, t=1:prm.ndays],
-        (1.0/prm.tinf)*i[c, t]
+        1/tq*q[c, t] + (1.0/prm.tinf)*i[c, t]
     )
     if verbosity >= 1
         println("Defining SEIR equations... Ok!")
     end
 
     discr_method = "finite_difference"
-    #discr_method = "heun"
     k_curr_t = 0.5
     k_prev_t = 0.5
 
@@ -346,6 +360,9 @@ function seir_model_with_free_initial_values(prm, verbosity=0)
             i[c, t] == i[c, t - 1] + (k_prev_t*di[c, t-1] + k_curr_t*di[c, t])*dt
         )
         @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
+            q[c, t] == q[c, t - 1] + (k_prev_t*dq[c, t-1] + k_curr_t*dq[c, t])*dt
+        )
+        @constraint(m, [c=1:prm.ncities, t=2:prm.ndays],
             r[c, t] == r[c, t - 1] + (k_prev_t*dr[c, t-1] + k_curr_t*dr[c, t])*dt
         )
         if verbosity >= 1
@@ -364,15 +381,16 @@ end
 
 Creates a SEIR model setting the initial parameters for the SEIR variables from prm.
 """
-function seir_model(prm, verbosity)
-    m = seir_model_with_free_initial_values(prm, verbosity)
+function seir_model(prm, verbosity, tau=3, test_efficacy=0.8)
+    m = seir_model_with_free_initial_values(prm, verbosity, tau, test_efficacy)
 
     # Initial state
-    s1, e1, i1, r1 = m[:s][:, 1], m[:e][:, 1], m[:i][:, 1], m[:r][:, 1]
+    s1, e1, i1, q1, r1 = m[:s][:, 1], m[:e][:, 1], m[:i][:, 1], m[:q][:, 1], m[:r][:, 1]
     for c in 1:prm.ncities
         fix(s1[c], prm.s1[c]; force=true)
         fix(e1[c], prm.e1[c]; force=true)
         fix(i1[c], prm.i1[c]; force=true)
+        fix(q1[c], 0.0; force=true)
         fix(r1[c], prm.r1[c]; force=true)
     end
     return m
@@ -418,11 +436,15 @@ function fit_initial(tinc, tinf, rep, time_icu, data, ttv_weight=0.25)
     m = seir_model_with_free_initial_values(prm)
 
     # Initial state
-    s1, e1, i, r1, rt = m[:s][1, 1], m[:e][1, 1], m[:i], m[:r][1, 1], m[:rt]
+    s1, e1, i, q, r1, rt, test = m[:s][1, 1], m[:e][1, 1], m[:i], m[:q], m[:r][1, 1], m[:rt], m[:test]
     set_start_value(r1, prm.r1[1])
     set_start_value(s1, prm.s1[1])
     set_start_value(e1, prm.e1[1])
     set_start_value(i[1, 1], prm.i1[1])
+    for c =1:prm.ncities, d=1:prm.ndays
+        fix(test[c, d], 0.0; force=true)
+        fix(q[c, d], 0.0; force=true)
+    end
 
     # Define upper bounds on rt
     for t = 1:prm.window:prm.ndays
@@ -472,13 +494,19 @@ time windows.
 """
 function window_control_multcities(prm, population, target, force_difference, 
     hammer_duration=0, hammer=0.89, min_rt=1.0, pools=[[c] for c in 1:prm.ncities],
-    verbosity=0)
+    verbosity=0, test_budget=0, tests_off=Int64[], 
+    tau=3, test_efficacy=0.8, daily_tests=0, proportional_test=false)
     @assert sum(mod.(hammer_duration, prm.window)) == 0
+
+    # TODO: Define how to make this constant available here and in the definition
+    # of the model.
+    sars_over_cov = 4
+    sick_tested = 0.4
 
     # TODO: These should be parameters - first try
     times_series = [Simple_ARTS(prm.rho_icu_ts[c, :]...) for c in 1:prm.ncities]
 
-    m = seir_model(prm, verbosity)
+    m = seir_model(prm, verbosity, tau, test_efficacy)
 
     if verbosity >= 1
         println("Setting limits for rt...")
@@ -571,6 +599,52 @@ function window_control_multcities(prm, population, target, force_difference,
     # @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
     #     i[c, d] <= target[c, d]*availICU[c]
     # )
+
+    # Constraints on the tests
+    if test_budget > 0
+        test, i = m[:test], m[:i]
+        max_pop = maximum(population)
+        # Only use the given budget of tests
+        @expression(m, total_tests[d=1:prm.ndays],
+            sum(population[c]*test[c, d] for c = 1:prm.ncities) 
+        )
+        @constraint(m, use_test_available,
+            sum(total_tests)/max_pop <= test_budget/max_pop
+        )
+        # Maximal ammount of daily test
+        # https://www.saopaulo.sp.gov.br/ultimas-noticias/sp-mira-30-mil-testes-diarios-coronavirus-com-inclusao-exames-privados/
+        @constraint(m, max_day[d=1:prm.ndays],
+            total_tests[d]/max_pop <= daily_tests/max_pop
+        )
+
+        @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
+            test[c, d] <= sars_over_cov * sick_tested * i[c, d] / prm.tinf
+        )
+
+        # Disallow test in some regions.
+        for c in tests_off
+            for d = 1:prm.ndays
+                fix(test[c, d], 0.0; force=true)
+            end
+        end 
+
+        # Limit tests to the proportion of infected in the privious day
+        if proportional_test
+            @expression(m, total_infected[d=1:prm.ndays],
+                sum(i[c, d]*population[c] for c = 1:prm.ncities)
+            )
+            @constraint(m, proprional_tests[c=1:prm.ncities, d=2:prm.ndays],
+                test[c, d]*total_infected[d - 1]/max_pop <= i[c, d - 1]*total_tests[d]/max_pop
+            )
+        end
+
+    else
+        test = m[:test]
+        for c = 1:prm.ncities, d = 1:prm.ndays
+            fix(test[c, d], 0.0; force=true)
+        end
+    end
+    
 
     if verbosity >= 1
         println("Setting limits for number of infected... Ok!")
