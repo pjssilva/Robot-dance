@@ -62,6 +62,8 @@ struct SEIR_Parameters
     out::Vector{Float64}
     M::SparseMatrixCSC{Float64,Int64}
     Mt::SparseMatrixCSC{Float64,Int64}
+    sars_over_cov::Float64
+    sick_tested::Float64
 
     """
         SEIR_Parameters(tinc, tinf, rep, ndays, s1, e1, i1, r1, alternate,
@@ -85,8 +87,10 @@ struct SEIR_Parameters
         @assert size(Mt) == (ls1, ls1)
         @assert all(Mt .>= 0.0)
 
+        # For now sars_over_cov and sick_tested are hard coded
+        sars_over_cov, sick_tested = 4.0, 0.4
         new(tinc, tinf, rep, ndays, ls1, s1, e1, i1, r1, alternate, availICU, time_icu,
-            rho_icu_ts, window, out, M, Mt)
+            rho_icu_ts, window, out, M, Mt, sars_over_cov, sick_tested)
     end
 
     """
@@ -211,10 +215,7 @@ function seir_model_with_free_initial_values(prm, verbosity=0, tau=3, test_effic
     @variable(m, 0.0 <= test[1:prm.ncities, 1:prm.ndays] <= 1.0)
 
     # Constants that define the testing impact
-    # TODO: These values should be paramters
-    # 1/4 of the tests are from Covid-19
-    sars_over_cov = 4
-    test_const = 1/sars_over_cov*test_efficacy*exp(-tau/prm.tinf)
+    test_const = 1/prm.sars_over_cov*test_efficacy*exp(-tau/prm.tinf)
 
     # Control variable
     @variable(m, 0.0 <= rt[1:prm.ncities, 1:prm.window:prm.ndays] <= prm.rep)
@@ -390,8 +391,9 @@ function seir_model(prm, verbosity, tau=3, test_efficacy=0.8)
         fix(s1[c], prm.s1[c]; force=true)
         fix(e1[c], prm.e1[c]; force=true)
         fix(i1[c], prm.i1[c]; force=true)
-        fix(q1[c], 0.0; force=true)
         fix(r1[c], prm.r1[c]; force=true)
+        fix(q1[c], 
+            max(0.0, 1.0 - prm.s1[c] - prm.e1[c] - prm.i1[c] - prm.r1[c]); force=true)
     end
     return m
 end
@@ -498,11 +500,6 @@ function window_control_multcities(prm, population, target, force_difference,
     tau=3, test_efficacy=0.8, daily_tests=0, proportional_test=false)
     @assert sum(mod.(hammer_duration, prm.window)) == 0
 
-    # TODO: Define how to make this constant available here and in the definition
-    # of the model.
-    sars_over_cov = 4
-    sick_tested = 0.4
-
     # TODO: These should be parameters - first try
     times_series = [Simple_ARTS(prm.rho_icu_ts[c, :]...) for c in 1:prm.ncities]
 
@@ -525,31 +522,21 @@ function window_control_multcities(prm, population, target, force_difference,
         println("Setting limits for rt... Ok!")
     end
 
-    # Bound the maximal infection rate using a chance constraint
-    # Bound the maximal infection rate taking into account the maximal ICU rooms available.
-    # Some configuration parameters got from https://covid-calc.org/
-    # Time to enter ICU after leaving I (getting into R)
-    # Acoording to https://www.nejm.org/doi/full/10.1056/nejmoa2004500 the time
-    # to ICU is 7 days after symptoms, but you have 2 days in I (citation) 
-    # before becoming symptomatic.
-    # TODO: Align comment above in the paper.
-    # TIME_TO_ICU = 7 + 2 - int(round(prm.tinf)) - 1
+    # Bound the maximal infection rate taking into account the maximal ICU rooms available
+    # using a chance contraint.
     if verbosity >= 1
         println("Setting limits for number of infected...")
     end
 
     # We implement two variants one based on max I and another on sum on
-    # entering in R
-
-    # Max I
+    # entering in R, the max I is simples and gives good results so we
+    # are keeping it in the code.
     i = m[:i]
     firstday = hammer_duration .+ 1
 
     println(pools)
     n_pools = length(pools)
     first_pool_day = [minimum(firstday[pool]) for pool in pools]    
-    # TODO: Erase if not used.
-    #first_pool_day += [length(pool) > 1 ? 14 : 0 for pool in pools]
     pool_population = [sum(population[pool]) for pool in pools]
     @variable(m, V[p=1:n_pools, d=first_pool_day[p]:prm.ndays - prm.time_icu] >= 0)
     for p in 1:n_pools
@@ -565,18 +552,6 @@ function window_control_multcities(prm, population, target, force_difference,
             V[p, d] == prm.time_icu/prm.tinf*sum(population[c]*i[c, d] for c in pool) / pool_population[p]
         )
 
-        # # Entering in R
-        # TODO: adapt to use pools
-        # firstday = max.(2, hammer_duration .+ 1)
-        # r = m[:r]
-        # @expression(m, leave_i[c=1:prm.ncities, d=2:prm.ndays], r[c, d] - r[c, d - 1])
-        # # As in the paper, V represents the number of people that will leave
-        # # infected and potentially go to ICU.
-        # @variable(m, sqV[c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu] >= 0)
-        # @constraint(m, [c=1:prm.ncities, d=firstday:prm.ndays - prm.time_icu],
-        #             sqV[c, d]*sqV[c, d] == sum(leave_i[c, dl] for dl=d:d + prm.time_icu - 1)
-        # )
-        #println()
         for d in 1:prm.ndays - prm.time_icu
             Eicu, safety_level = iterate(ρ_icu)
             if d >= first_pool_day[p]
@@ -585,20 +560,8 @@ function window_control_multcities(prm, population, target, force_difference,
                     sum(target[c, d]*population[c]*prm.availICU[c] for c in pool) / pool_population[p]
                 )
             end
-            #println(Eicu, " ", F1p*σω*Δ*sqrt(sumΘ2), " ", Eicu + F1p*σω*Δ*sqrt(sumΘ2))
-            #println("$F1p $σω $Δ $(sqrt(sumΘ2))")
         end
     end
-
-    # # Simple form that is based only on the upper bound and means.
-    # availICU = copy(prm.availICU)
-    # availICU /= prm.time_icu
-    # availICU /= prm.need_icu 
-    # availICU *= prm.tinf
-    # i = m[:i]
-    # @constraint(m, [c=1:prm.ncities, d=hammer_duration[c] + 1:prm.ndays], 
-    #     i[c, d] <= target[c, d]*availICU[c]
-    # )
 
     # Constraints on the tests
     if test_budget > 0
@@ -612,13 +575,12 @@ function window_control_multcities(prm, population, target, force_difference,
             sum(total_tests)/max_pop <= test_budget/max_pop
         )
         # Maximal ammount of daily test
-        # https://www.saopaulo.sp.gov.br/ultimas-noticias/sp-mira-30-mil-testes-diarios-coronavirus-com-inclusao-exames-privados/
         @constraint(m, max_day[d=1:prm.ndays],
             total_tests[d]/max_pop <= daily_tests/max_pop
         )
 
         @constraint(m, test_only_present[c=1:prm.ncities, d=1:prm.ndays],
-            test[c, d] <= sars_over_cov * sick_tested * i[c, d] / prm.tinf
+            test[c, d] <= prm.sars_over_cov * prm.sick_tested * i[c, d] / prm.tinf
         )
 
         # Disallow test in some regions.
@@ -665,7 +627,7 @@ function window_control_multcities(prm, population, target, force_difference,
         # Try to keep as many people working as possible
         prm.window*sum(effect_pop[c]/mean_population*(prm.rep - rt[c, d])
             for c = 1:prm.ncities for d = hammer_duration[c]+1:prm.window:prm.ndays) -
-        # Estimula o bang-bang
+        # Induce bang-bang
         0.02*prm.alternate*prm.window*sum(
             force_difference[c, d]*effect_pop[c]/mean_population*
             (prm.rep - rt[c, d])*(min_rt - rt[c, d])
@@ -767,36 +729,6 @@ function simulate_control(prm, population, control, target)
             for d = hammer_duration[c] + 1:prm.window:prm.ndays
             )
     )
-
-    return m
-end
-
-
-"""
-    playground
-
-Funtion to test ideas.
-"""
-
-function playground(prm, population, target, final_target, hammer_durarion)
-    @assert mod(hammer_duration[c], prm.window) == 0
-
-    m = seir_model(prm)
-
-    # Constraint the overall number of infected to simulate a full health pool.
-    i = m[:i]
-    @constraint(m, sum(population[c]*i[c,prm.ndays] for c = 1:prm.ncities) <= final_target)
-
-    # Bound the maximal infection rate
-    @constraint(m, [c=1:prm.ncities, t=hammer_duration[c] + 1:prm.ndays],
-        i[c, t] <= target[c, t]
-    )
-
-    # Find the maximal acceptable Rt
-    @variable(m, min_rt)
-    rt = m[:rt]
-    @constraint(m, bound_rt[c = 1:prm.ncities, d = 1:prm.window:prm.ndays], min_rt <= rt[c, d])
-    @objective(m, Max, min_rt)
 
     return m
 end
