@@ -1,7 +1,7 @@
 # Compiling Ipopt with Mumps, HSL, and Pardiso
 
 In order to achieve the best performance from the solver you should try different linear
-solvers. For small problems it lookg like mumps is good enough. For large problems, let us
+solvers. For small problems it looks like mumps is good enough. For large problems, let us
 say with more than 10 cities or regions you may need a better solver as MA97 or Pardiso.
 
 This documents how I compiled Ipopt and then installed the compiled version to be used with
@@ -12,7 +12,7 @@ Ipopt.jl under Linux. This ia a small variation of [Ipopt's documentation](https
 You can follow Ipopt documentation and obtain HSL code with you are an academic, otherwise
 it looks like you need to buy it. I am using the file coinhsl-2019.05.21.tar.gz.
 
-Pardiso can be obtanind free for academic use in https://pardiso-project.org/ I got the
+Pardiso can be obtanined free for academic use in https://pardiso-project.org/ I got the
 version `libpardiso600-GNU800-X86-64.so`. You should also add the lines below to your 
 bashrc:
 
@@ -23,7 +23,7 @@ export JULIA_IPOPT_EXECUTABLE_PATH=/usr/local/bin
 export OMP_NUM_THREADS=<num. of cores>
 
 # If you want to use Pardiso
-export PARDISO_PATH=/home/pjssilva/documentos/programas/pardiso
+export PARDISO_PATH=LOCATION_OF_YOUR_PARDISO_LIBRARY
 export PARDISO_LIC_PATH=$PARDISO_PATH
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PARDISO_PATH
 export PARDISOLICMESSAGE=1
@@ -52,6 +52,7 @@ cd ThirdParty-ASL
 ./configure
 make
 sudo make install
+cd ..
 ```
 
 ## Compile and Install HSL
@@ -64,12 +65,13 @@ cd ThirdParty-HSL
 ```
 
 Copy the HSL source (see above), untar it, and create a symbolic link named `coinhsl`
-pointin to it. Then,
+pointing to it. Then,
 
 ```bash
 ./configure
 make
 sudo make install
+cd ..
 ```
 
 ## Compile and Install Mumps
@@ -81,12 +83,13 @@ cd ThirdParty-Mumps
 ./configure
 make
 sudo make install
+cd ..
 ```
 
 ## Compile and Install Ipopt
 
 It seems that if you link Pardiso and HSL at the same time you can get a core dump when
-using HSL (probabaly dur to Metis duplication at Pardion binary). So if you plan to use
+using HSL (probably due to Metis duplication at Pardiso binary). So if you plan to use
 HSL, do delete the `--with-pardiso` option below.
 
 ```bash
@@ -99,6 +102,7 @@ $IPOPTDIR/configure --with-asl --with-mumps --with-pardiso="$PARDISO_PATH/libpar
 make
 make test
 sudo make install
+cd ../..
 ```
 
 ## Build Ipopt.jl
@@ -111,7 +115,7 @@ Pkg.build("Ipopt")
 using JuMP
 using Ipopt
 m = Model(optimizer_with_attributes(Ipopt.Optimizer,
-          "print_level" => 5, "linear_solver" => "pardiso"))
+          "print_level" => 5, "linear_solver" => "ma57"))
 @variable(m, x)
 @objective(m, Min, (x - 0.5)^2)
 optimize!(m)
